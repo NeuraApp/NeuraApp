@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
-import { BarChart3, TrendingUp, Users, Zap, Calendar, Target } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, Zap, Calendar, Target, Youtube, Music, Instagram, ExternalLink } from 'lucide-react';
 import { useSubscription } from '@/hooks/useSubscription';
+import type { ContentAnalytics, ContentInsights } from '@/types/content';
 
 interface Metricas {
   totalIdeias: number;
@@ -21,10 +22,18 @@ interface Metricas {
   };
 }
 
-interface UsageData {
-  date: string;
-  count: number;
+interface SocialConnection {
+  platform: string;
+  platform_username: string;
+  last_sync_at: string;
+  is_expired: boolean;
 }
+
+const PLATFORM_ICONS = {
+  youtube: Youtube,
+  tiktok: Music,
+  instagram: Instagram
+};
 
 export default function Analytics() {
   const { subscription, isActive, isPro } = useSubscription();
@@ -37,11 +46,18 @@ export default function Analytics() {
     ideiasPopulares: [],
     usoMensal: { labels: [], data: [] }
   });
+  const [contentAnalytics, setContentAnalytics] = useState<ContentAnalytics[]>([]);
+  const [insights, setInsights] = useState<ContentInsights | null>(null);
+  const [connections, setConnections] = useState<SocialConnection[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     carregarMetricas();
-  }, []);
+    if (isPro) {
+      carregarAnalyticsAvancado();
+      carregarConexoes();
+    }
+  }, [isPro]);
 
   const carregarMetricas = async () => {
     try {
@@ -131,6 +147,42 @@ export default function Analytics() {
     }
   };
 
+  const carregarAnalyticsAvancado = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Carregar dados da view consolidada
+      const { data: analyticsData } = await supabase
+        .from('content_analytics')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      setContentAnalytics(analyticsData || []);
+
+      // Carregar insights
+      const { data: insightsData } = await supabase
+        .rpc('get_user_content_insights', { user_uuid: user.id });
+
+      if (insightsData && insightsData.length > 0) {
+        setInsights(insightsData[0]);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar analytics avançado:', err);
+    }
+  };
+
+  const carregarConexoes = async () => {
+    try {
+      const { data } = await supabase.rpc('get_active_connections');
+      setConnections(data || []);
+    } catch (err) {
+      console.error('Erro ao carregar conexões:', err);
+    }
+  };
+
   const cards = [
     {
       title: 'Total de Ideias',
@@ -210,6 +262,7 @@ export default function Analytics() {
           </div>
         ) : (
           <>
+            {/* Cards de Métricas */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {cards.map((card, index) => (
                 <div
@@ -235,6 +288,178 @@ export default function Analytics() {
               ))}
             </div>
 
+            {/* Status das Conexões */}
+            {isPro && (
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                  Status das Conexões Sociais
+                </h3>
+                {connections.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {connections.map((connection, index) => {
+                      const Icon = PLATFORM_ICONS[connection.platform as keyof typeof PLATFORM_ICONS];
+                      const lastSync = new Date(connection.last_sync_at);
+                      const daysSinceSync = Math.floor((Date.now() - lastSync.getTime()) / (1000 * 60 * 60 * 24));
+                      
+                      return (
+                        <div key={index} className="p-4 border border-gray-200 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            {Icon && <Icon className="w-5 h-5" />}
+                            <span className="font-medium capitalize">{connection.platform}</span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-1">
+                            {connection.platform_username}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Última sincronização: {daysSinceSync === 0 ? 'Hoje' : `${daysSinceSync} dias atrás`}
+                          </p>
+                          {connection.is_expired && (
+                            <p className="text-xs text-red-500 mt-1">Token expirado</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-gray-500 mb-4">Nenhuma conta conectada</p>
+                    <button
+                      onClick={() => window.location.href = '/minha-conta'}
+                      className="text-purple-600 hover:text-purple-800 font-medium"
+                    >
+                      Conectar contas sociais
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Insights Personalizados */}
+            {isPro && insights && (
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                  Insights Personalizados
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <h4 className="font-medium text-green-800 mb-2">🎯 Melhor Categoria</h4>
+                    <p className="text-sm text-green-700">
+                      {insights.best_categoria || 'Dados insuficientes'}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <h4 className="font-medium text-blue-800 mb-2">📱 Melhor Formato</h4>
+                    <p className="text-sm text-blue-700">
+                      {insights.best_formato || 'Dados insuficientes'}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-purple-50 rounded-lg">
+                    <h4 className="font-medium text-purple-800 mb-2">🚀 Melhor Plataforma</h4>
+                    <p className="text-sm text-purple-700">
+                      {insights.best_plataforma || 'Dados insuficientes'}
+                    </p>
+                  </div>
+                </div>
+                {insights.avg_performance_score && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <h4 className="font-medium text-gray-800 mb-2">📊 Score Médio de Performance</h4>
+                    <p className="text-2xl font-bold text-gray-800">
+                      {insights.avg_performance_score.toFixed(1)}/10
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      Baseado em {insights.total_content_pieces} conteúdos analisados
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Performance Detalhada */}
+            {isPro && contentAnalytics.length > 0 && (
+              <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                  Performance Detalhada
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Conteúdo
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Categoria
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Formato
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Plataforma
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Views
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Likes
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Score
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {contentAnalytics.slice(0, 10).map((item) => (
+                        <tr key={item.id}>
+                          <td className="px-4 py-4 text-sm text-gray-900 max-w-xs">
+                            <div className="truncate">
+                              {item.conteudo.length > 50 
+                                ? `${item.conteudo.substring(0, 50)}...` 
+                                : item.conteudo}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-500">
+                            <span className="px-2 py-1 text-xs font-medium bg-gray-100 rounded-full">
+                              {item.categoria}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-500">
+                            <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+                              {item.formato}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-500">
+                            <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full">
+                              {item.plataforma_alvo}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-900">
+                            {item.views ? item.views.toLocaleString() : '-'}
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-900">
+                            {item.likes ? item.likes.toLocaleString() : '-'}
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-900">
+                            {item.performance_score ? (
+                              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                                item.performance_score >= 7 
+                                  ? 'bg-green-100 text-green-800'
+                                  : item.performance_score >= 4
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                                {item.performance_score.toFixed(1)}
+                              </span>
+                            ) : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Gráfico de Uso */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-800 mb-4">
@@ -284,27 +509,25 @@ export default function Analytics() {
               </div>
             </div>
 
-            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                Insights e Recomendações
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 bg-blue-50 rounded-lg">
-                  <h4 className="font-medium text-blue-800 mb-2">📈 Tendência de Crescimento</h4>
-                  <p className="text-sm text-blue-700">
-                    Você está gerando {metricas.ideiasEstaSemanana} ideias por semana. 
-                    Continue assim para manter a criatividade em alta!
-                  </p>
-                </div>
-                <div className="p-4 bg-green-50 rounded-lg">
-                  <h4 className="font-medium text-green-800 mb-2">⭐ Qualidade</h4>
-                  <p className="text-sm text-green-700">
-                    Sua taxa de sucesso de {metricas.taxaSucesso.toFixed(1)}% está excelente! 
-                    Continue explorando diferentes nichos.
-                  </p>
-                </div>
+            {/* Call to Action para conectar contas */}
+            {isPro && connections.length === 0 && (
+              <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-200">
+                <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                  🚀 Desbloqueie o Poder dos Dados Reais
+                </h3>
+                <p className="text-gray-600 mb-4">
+                  Conecte suas contas do YouTube e TikTok para começar a coletar dados de performance 
+                  e receber insights personalizados sobre seus conteúdos.
+                </p>
+                <button
+                  onClick={() => window.location.href = '/minha-conta'}
+                  className="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors inline-flex items-center gap-2"
+                >
+                  Conectar Contas Sociais
+                  <ExternalLink className="w-4 h-4" />
+                </button>
               </div>
-            </div>
+            )}
           </>
         )}
       </div>
