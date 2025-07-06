@@ -6,17 +6,11 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-interface IdeiaGerada {
-  nome: string;
-  descricao: string;
-  redeSocial: string;
-  potencialViral: 'alto' | 'médio' | 'baixo';
-}
-
-interface RateLimitInfo {
-  count: number;
-  reset: number;
-  limit: number;
+interface IdeiaGeradaCompleta {
+  conteudo: string;
+  categoria: string;
+  formato: string;
+  plataforma_alvo: string;
 }
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -33,7 +27,6 @@ async function checkRateLimit(userId: string): Promise<void> {
   const now = Date.now();
   const windowStart = now - RATE_LIMIT_WINDOW;
 
-  // Count requests in the last hour
   const { count, error } = await supabase
     .from('logs')
     .select('*', { count: 'exact' })
@@ -43,7 +36,6 @@ async function checkRateLimit(userId: string): Promise<void> {
 
   if (error) {
     console.error('Error checking rate limit:', error);
-    // Don't block on rate limit check errors
     return;
   }
 
@@ -66,7 +58,7 @@ async function callOpenRouterAPI(prompt: string): Promise<string> {
       messages: [
         {
           role: 'system',
-          content: 'Você é um especialista em marketing viral e criação de conteúdo para redes sociais. Sempre responda em português brasileiro.'
+          content: 'Você é um especialista em marketing viral e criação de conteúdo para redes sociais. Sempre responda em português brasileiro com JSON válido.'
         },
         {
           role: 'user',
@@ -74,7 +66,7 @@ async function callOpenRouterAPI(prompt: string): Promise<string> {
         }
       ],
       temperature: 0.8,
-      max_tokens: 500
+      max_tokens: 600
     })
   });
 
@@ -94,46 +86,30 @@ async function callOpenRouterAPI(prompt: string): Promise<string> {
   return content.trim();
 }
 
-function parseIdeiaResponse(content: string): IdeiaGerada {
+function parseIdeiaResponse(content: string): IdeiaGeradaCompleta {
   try {
-    // Try to parse as JSON first
+    // Tentar fazer parse como JSON primeiro
     const parsed = JSON.parse(content);
-    if (parsed.nome && parsed.descricao) {
+    
+    if (parsed.conteudo && parsed.categoria && parsed.formato && parsed.plataforma_alvo) {
       return {
-        nome: parsed.nome,
-        descricao: parsed.descricao,
-        redeSocial: parsed.redeSocial || 'Instagram',
-        potencialViral: parsed.potencialViral || 'médio'
+        conteudo: parsed.conteudo,
+        categoria: parsed.categoria,
+        formato: parsed.formato,
+        plataforma_alvo: parsed.plataforma_alvo
       };
     }
-  } catch {
-    // If not JSON, parse as text
+  } catch (e) {
+    console.log('Failed to parse as JSON, trying text parsing');
   }
 
-  // Parse text format
-  const lines = content.split('\n').filter(line => line.trim());
-  
-  let nome = 'Ideia Criativa';
-  let descricao = content;
-  let redeSocial = 'Instagram';
-  let potencialViral: 'alto' | 'médio' | 'baixo' = 'médio';
-
-  for (const line of lines) {
-    const lower = line.toLowerCase();
-    if (lower.includes('nome') && lower.includes(':')) {
-      nome = line.split(':')[1]?.trim() || nome;
-    } else if (lower.includes('descrição') && lower.includes(':')) {
-      descricao = line.split(':')[1]?.trim() || descricao;
-    } else if (lower.includes('rede') && lower.includes(':')) {
-      redeSocial = line.split(':')[1]?.trim() || redeSocial;
-    } else if (lower.includes('potencial') && lower.includes(':')) {
-      const potential = line.split(':')[1]?.trim().toLowerCase();
-      if (potential?.includes('alto')) potencialViral = 'alto';
-      else if (potential?.includes('baixo')) potencialViral = 'baixo';
-    }
-  }
-
-  return { nome, descricao, redeSocial, potencialViral };
+  // Se não conseguir fazer parse como JSON, usar valores padrão
+  return {
+    conteudo: content,
+    categoria: 'Educacional',
+    formato: 'Tutorial',
+    plataforma_alvo: 'Instagram'
+  };
 }
 
 Deno.serve(async (req) => {
@@ -168,12 +144,17 @@ Deno.serve(async (req) => {
     // Get user profile for personalization
     const metadata = user.user_metadata || {};
     
-    // Build personalized prompt
-    let prompt = '';
-    
-    if (format === 'structured') {
-      prompt = `Crie uma ideia viral estruturada para redes sociais.
+    // Build enhanced prompt for structured content generation
+    const prompt = `Crie uma ideia viral estruturada para redes sociais seguindo EXATAMENTE este formato JSON:
 
+{
+  "conteudo": "Descrição detalhada da ideia em até 300 caracteres",
+  "categoria": "Uma das opções: Educacional, Humor, Opinião Contrária, Storytelling, Motivacional, Tutorial, Tendência",
+  "formato": "Uma das opções: Tutorial, POV, Lista, Reação, Desafio, Antes/Depois, Pergunta, Dica Rápida",
+  "plataforma_alvo": "Uma das opções: TikTok, YouTube, Instagram Reels, LinkedIn, Twitter"
+}
+
+CONTEXTO DO USUÁRIO:
 ${metadata.nomeEmpresa ? `Empresa: ${metadata.nomeEmpresa}` : ''}
 ${metadata.nicho ? `Nicho: ${metadata.nicho}` : ''}
 ${metadata.subnicho ? `Sub-nicho: ${metadata.subnicho}` : ''}
@@ -181,43 +162,36 @@ ${metadata.sobre ? `Sobre a marca: ${metadata.sobre}` : ''}
 ${metadata.tomDeVoz ? `Tom de voz: ${metadata.tomDeVoz}` : ''}
 ${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}
 
-Responda EXATAMENTE no formato JSON:
-{
-  "nome": "Nome curto e impactante da ideia",
-  "descricao": "Descrição detalhada em até 200 caracteres",
-  "redeSocial": "Instagram, TikTok, YouTube ou LinkedIn",
-  "potencialViral": "alto, médio ou baixo"
-}
-
-A ideia deve ser:
-- Original e criativa
-- Alinhada com tendências atuais
-- Viável de implementar
-- Específica para o nicho mencionado`;
-    } else {
-      prompt = `Gere uma ideia viral criativa e original para redes sociais.
-
-${metadata.nomeEmpresa ? `Para a empresa: ${metadata.nomeEmpresa}` : ''}
-${metadata.nicho ? `Nicho: ${metadata.nicho}` : ''}
-${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}
-
-A ideia deve ser:
-- Concisa (máximo 280 caracteres)
-- Criativa e original
-- Alinhada com tendências atuais
-- Pronta para implementar
-
-Responda apenas com a ideia, sem explicações extras.`;
-    }
+INSTRUÇÕES:
+- A ideia deve ser original, criativa e alinhada com tendências atuais
+- O conteúdo deve ser específico e acionável
+- Escolha a categoria que melhor se adequa ao nicho
+- Selecione o formato mais eficaz para o tipo de conteúdo
+- Defina a plataforma ideal baseada no formato e audiência
+- Responda APENAS com o JSON válido, sem texto adicional`;
 
     // Call AI API
     const aiResponse = await callOpenRouterAPI(prompt);
+    const ideiaCompleta = parseIdeiaResponse(aiResponse);
 
-    let result;
-    if (format === 'structured') {
-      result = parseIdeiaResponse(aiResponse);
-    } else {
-      result = aiResponse;
+    // Save to database with new structure
+    const { data: savedIdeia, error: saveError } = await supabase
+      .from('ideias_virais')
+      .insert([
+        {
+          conteudo: ideiaCompleta.conteudo,
+          categoria: ideiaCompleta.categoria,
+          formato: ideiaCompleta.formato,
+          plataforma_alvo: ideiaCompleta.plataforma_alvo,
+          user_id: user.id,
+        },
+      ])
+      .select()
+      .single();
+
+    if (saveError) {
+      console.warn('Error saving idea:', saveError);
+      // Don't fail the operation if save fails
     }
 
     // Log successful interaction
@@ -228,15 +202,16 @@ Responda apenas com a ideia, sem explicações extras.`;
       metadata: {
         context,
         format,
-        prompt_length: prompt.length,
-        response_length: aiResponse.length,
+        categoria: ideiaCompleta.categoria,
+        formato: ideiaCompleta.formato,
+        plataforma_alvo: ideiaCompleta.plataforma_alvo,
         has_profile: !!(metadata.nomeEmpresa || metadata.nicho)
       },
       timestamp: new Date().toISOString()
     });
 
     return new Response(
-      JSON.stringify(result),
+      JSON.stringify(ideiaCompleta),
       { 
         headers: { 
           ...corsHeaders, 
