@@ -11,6 +11,7 @@ interface IdeiaGeradaCompleta {
   categoria: string;
   formato: string;
   plataforma_alvo: string;
+  tendencia_utilizada?: string;
 }
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -41,6 +42,46 @@ async function checkRateLimit(userId: string): Promise<void> {
 
   if (count && count >= RATE_LIMIT_MAX) {
     throw new Error(`Rate limit exceeded. Maximum ${RATE_LIMIT_MAX} requests per hour.`);
+  }
+}
+
+async function getEmergingTrends(userNicho?: string): Promise<string[]> {
+  try {
+    // Buscar tendências emergentes, priorizando o nicho do usuário
+    const { data: trends, error } = await supabase
+      .from('tendencias_globais')
+      .select('item_nome, categoria_nicho, growth_rate')
+      .eq('status', 'emerging')
+      .gte('data_coleta', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+      .order('growth_rate', { ascending: false })
+      .limit(5);
+
+    if (error) {
+      console.error('Error fetching trends:', error);
+      return [];
+    }
+
+    if (!trends || trends.length === 0) {
+      return [];
+    }
+
+    // Filtrar por nicho do usuário se disponível
+    let filteredTrends = trends;
+    if (userNicho) {
+      const nichoTrends = trends.filter(t => 
+        t.categoria_nicho?.toLowerCase().includes(userNicho.toLowerCase()) ||
+        userNicho.toLowerCase().includes(t.categoria_nicho?.toLowerCase() || '')
+      );
+      
+      if (nichoTrends.length > 0) {
+        filteredTrends = nichoTrends;
+      }
+    }
+
+    return filteredTrends.slice(0, 2).map(t => t.item_nome);
+  } catch (err) {
+    console.error('Error getting emerging trends:', err);
+    return [];
   }
 }
 
@@ -96,7 +137,8 @@ function parseIdeiaResponse(content: string): IdeiaGeradaCompleta {
         conteudo: parsed.conteudo,
         categoria: parsed.categoria,
         formato: parsed.formato,
-        plataforma_alvo: parsed.plataforma_alvo
+        plataforma_alvo: parsed.plataforma_alvo,
+        tendencia_utilizada: parsed.tendencia_utilizada || null
       };
     }
   } catch (e) {
@@ -108,7 +150,8 @@ function parseIdeiaResponse(content: string): IdeiaGeradaCompleta {
     conteudo: content,
     categoria: 'Educacional',
     formato: 'Tutorial',
-    plataforma_alvo: 'Instagram'
+    plataforma_alvo: 'Instagram',
+    tendencia_utilizada: null
   };
 }
 
@@ -144,14 +187,31 @@ Deno.serve(async (req) => {
     // Get user profile for personalization
     const metadata = user.user_metadata || {};
     
-    // Build enhanced prompt for structured content generation
+    // 🚀 NOVA FUNCIONALIDADE: Buscar tendências emergentes
+    const emergingTrends = await getEmergingTrends(metadata.nicho);
+    
+    // Build enhanced prompt with trending context
+    let trendingContext = '';
+    if (emergingTrends.length > 0) {
+      trendingContext = `
+
+🔥 CONTEXTO ADICIONAL DE ALTA PRIORIDADE - TENDÊNCIAS EMERGENTES:
+As seguintes tendências estão emergindo e ganhando tração no momento:
+${emergingTrends.map((trend, i) => `${i + 1}. ${trend}`).join('\n')}
+
+INSTRUÇÃO ESPECIAL: Incorpore criativamente UMA dessas tendências na ideia de conteúdo gerada. 
+No campo 'tendencia_utilizada' do JSON de resposta, informe EXATAMENTE qual tendência você usou (copie o texto exato).
+Se não conseguir incorporar nenhuma tendência de forma natural, deixe 'tendencia_utilizada' como null.`;
+    }
+
     const prompt = `Crie uma ideia viral estruturada para redes sociais seguindo EXATAMENTE este formato JSON:
 
 {
   "conteudo": "Descrição detalhada da ideia em até 300 caracteres",
   "categoria": "Uma das opções: Educacional, Humor, Opinião Contrária, Storytelling, Motivacional, Tutorial, Tendência",
   "formato": "Uma das opções: Tutorial, POV, Lista, Reação, Desafio, Antes/Depois, Pergunta, Dica Rápida",
-  "plataforma_alvo": "Uma das opções: TikTok, YouTube, Instagram Reels, LinkedIn, Twitter"
+  "plataforma_alvo": "Uma das opções: TikTok, YouTube, Instagram Reels, LinkedIn, Twitter",
+  "tendencia_utilizada": "Nome exato da tendência utilizada ou null"
 }
 
 CONTEXTO DO USUÁRIO:
@@ -160,7 +220,7 @@ ${metadata.nicho ? `Nicho: ${metadata.nicho}` : ''}
 ${metadata.subnicho ? `Sub-nicho: ${metadata.subnicho}` : ''}
 ${metadata.sobre ? `Sobre a marca: ${metadata.sobre}` : ''}
 ${metadata.tomDeVoz ? `Tom de voz: ${metadata.tomDeVoz}` : ''}
-${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}
+${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}${trendingContext}
 
 INSTRUÇÕES:
 - A ideia deve ser original, criativa e alinhada com tendências atuais
@@ -174,7 +234,7 @@ INSTRUÇÕES:
     const aiResponse = await callOpenRouterAPI(prompt);
     const ideiaCompleta = parseIdeiaResponse(aiResponse);
 
-    // Save to database with new structure
+    // Save to database with new structure including trend
     const { data: savedIdeia, error: saveError } = await supabase
       .from('ideias_virais')
       .insert([
@@ -183,6 +243,7 @@ INSTRUÇÕES:
           categoria: ideiaCompleta.categoria,
           formato: ideiaCompleta.formato,
           plataforma_alvo: ideiaCompleta.plataforma_alvo,
+          tendencia_utilizada: ideiaCompleta.tendencia_utilizada,
           user_id: user.id,
         },
       ])
@@ -194,7 +255,7 @@ INSTRUÇÕES:
       // Don't fail the operation if save fails
     }
 
-    // Log successful interaction
+    // Log successful interaction with trend info
     await supabase.from('logs').insert({
       event: 'idea_generated',
       user_id: user.id,
@@ -205,6 +266,9 @@ INSTRUÇÕES:
         categoria: ideiaCompleta.categoria,
         formato: ideiaCompleta.formato,
         plataforma_alvo: ideiaCompleta.plataforma_alvo,
+        tendencia_utilizada: ideiaCompleta.tendencia_utilizada,
+        trending_context_available: emergingTrends.length > 0,
+        emerging_trends_count: emergingTrends.length,
         has_profile: !!(metadata.nomeEmpresa || metadata.nicho)
       },
       timestamp: new Date().toISOString()
@@ -217,7 +281,8 @@ INSTRUÇÕES:
           ...corsHeaders, 
           'Content-Type': 'application/json',
           'X-RateLimit-Remaining': String(RATE_LIMIT_MAX - 1),
-          'X-RateLimit-Reset': String(Date.now() + RATE_LIMIT_WINDOW)
+          'X-RateLimit-Reset': String(Date.now() + RATE_LIMIT_WINDOW),
+          'X-Trending-Context': emergingTrends.length > 0 ? 'true' : 'false'
         } 
       }
     );
