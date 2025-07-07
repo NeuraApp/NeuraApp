@@ -9,6 +9,7 @@ import {
   BarChart3, 
   Settings, 
   Brain,
+  Target,
   LogOut 
 } from 'lucide-react';
 import { ThemeSwitcher } from './ThemeSwitcher';
@@ -47,6 +48,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       name: 'Ideias Salvas', 
       path: '/ideias-salvas',
       icon: <BookMarked className="w-5 h-5" />
+    },
+    { 
+      name: 'Campanhas', 
+      path: '/campanhas',
+      icon: <Target className="w-5 h-5" />
     },
     { 
       name: 'Analytics', 

@@ -12,6 +12,11 @@ interface IdeiaGeradaCompleta {
   formato: string;
   plataforma_alvo: string;
   tendencia_utilizada?: string;
+  ganchos_sugeridos?: Array<{
+    texto_gancho: string;
+    potencial_retencao_score: number;
+    justificativa: string;
+  }>;
 }
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -107,7 +112,7 @@ async function callOpenRouterAPI(prompt: string): Promise<string> {
         }
       ],
       temperature: 0.8,
-      max_tokens: 600
+      max_tokens: 1200 // Aumentado para acomodar ganchos
     })
   });
 
@@ -138,7 +143,8 @@ function parseIdeiaResponse(content: string): IdeiaGeradaCompleta {
         categoria: parsed.categoria,
         formato: parsed.formato,
         plataforma_alvo: parsed.plataforma_alvo,
-        tendencia_utilizada: parsed.tendencia_utilizada || null
+        tendencia_utilizada: parsed.tendencia_utilizada || null,
+        ganchos_sugeridos: parsed.ganchos_sugeridos || []
       };
     }
   } catch (e) {
@@ -151,7 +157,8 @@ function parseIdeiaResponse(content: string): IdeiaGeradaCompleta {
     categoria: 'Educacional',
     formato: 'Tutorial',
     plataforma_alvo: 'Instagram',
-    tendencia_utilizada: null
+    tendencia_utilizada: null,
+    ganchos_sugeridos: []
   };
 }
 
@@ -183,6 +190,8 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const context = body.context || 'general';
     const format = body.format || 'structured';
+    const includeHooks = body.include_hooks !== false; // Default true
+    const campaignContext = body.campaign_context || null; // Para campanhas
 
     // Get user profile for personalization
     const metadata = user.user_metadata || {};
@@ -190,7 +199,7 @@ Deno.serve(async (req) => {
     // 🚀 NOVA FUNCIONALIDADE: Buscar tendências emergentes
     const emergingTrends = await getEmergingTrends(metadata.nicho);
     
-    // Build enhanced prompt with trending context
+    // Build enhanced prompt with trending context and hooks
     let trendingContext = '';
     if (emergingTrends.length > 0) {
       trendingContext = `
@@ -204,6 +213,42 @@ No campo 'tendencia_utilizada' do JSON de resposta, informe EXATAMENTE qual tend
 Se não conseguir incorporar nenhuma tendência de forma natural, deixe 'tendencia_utilizada' como null.`;
     }
 
+    // Contexto específico para campanhas
+    let campaignPrompt = '';
+    if (campaignContext) {
+      campaignPrompt = `
+
+🎯 CONTEXTO DE CAMPANHA ESTRATÉGICA:
+Esta ideia faz parte de uma campanha com o objetivo: "${campaignContext.objetivo_principal}"
+Etapa da campanha: "${campaignContext.objetivo_etapa}"
+Ordem na sequência: ${campaignContext.ordem_etapa}
+
+INSTRUÇÃO: Crie uma ideia que se alinhe perfeitamente com esta etapa específica da campanha.`;
+    }
+
+    // Seção de ganchos A/B
+    let hooksSection = '';
+    if (includeHooks) {
+      hooksSection = `,
+  "ganchos_sugeridos": [
+    {
+      "texto_gancho": "Primeira variação do gancho (primeiros 3 segundos)",
+      "potencial_retencao_score": 85,
+      "justificativa": "Explicação do por que este gancho tem alto potencial"
+    },
+    {
+      "texto_gancho": "Segunda variação do gancho",
+      "potencial_retencao_score": 78,
+      "justificativa": "Explicação do potencial desta variação"
+    },
+    {
+      "texto_gancho": "Terceira variação do gancho",
+      "potencial_retencao_score": 92,
+      "justificativa": "Explicação do potencial desta variação"
+    }
+  ]`;
+    }
+
     const prompt = `Crie uma ideia viral estruturada para redes sociais seguindo EXATAMENTE este formato JSON:
 
 {
@@ -211,7 +256,7 @@ Se não conseguir incorporar nenhuma tendência de forma natural, deixe 'tendenc
   "categoria": "Uma das opções: Educacional, Humor, Opinião Contrária, Storytelling, Motivacional, Tutorial, Tendência",
   "formato": "Uma das opções: Tutorial, POV, Lista, Reação, Desafio, Antes/Depois, Pergunta, Dica Rápida",
   "plataforma_alvo": "Uma das opções: TikTok, YouTube, Instagram Reels, LinkedIn, Twitter",
-  "tendencia_utilizada": "Nome exato da tendência utilizada ou null"
+  "tendencia_utilizada": "Nome exato da tendência utilizada ou null"${hooksSection}
 }
 
 CONTEXTO DO USUÁRIO:
@@ -220,21 +265,25 @@ ${metadata.nicho ? `Nicho: ${metadata.nicho}` : ''}
 ${metadata.subnicho ? `Sub-nicho: ${metadata.subnicho}` : ''}
 ${metadata.sobre ? `Sobre a marca: ${metadata.sobre}` : ''}
 ${metadata.tomDeVoz ? `Tom de voz: ${metadata.tomDeVoz}` : ''}
-${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}${trendingContext}
+${metadata.objetivo ? `Objetivo: ${metadata.objetivo}` : ''}${trendingContext}${campaignPrompt}
 
 INSTRUÇÕES:
 - A ideia deve ser original, criativa e alinhada com tendências atuais
 - O conteúdo deve ser específico e acionável
 - Escolha a categoria que melhor se adequa ao nicho
 - Selecione o formato mais eficaz para o tipo de conteúdo
-- Defina a plataforma ideal baseada no formato e audiência
+- Defina a plataforma ideal baseada no formato e audiência${includeHooks ? `
+- Para os ganchos: crie 3 variações dos primeiros 3 segundos do conteúdo
+- Cada gancho deve ter um score de 0-100 baseado no potencial de retenção
+- Use gatilhos psicológicos comprovados: curiosidade, urgência, surpresa, controvérsia
+- Justifique cada score com base em padrões virais conhecidos` : ''}
 - Responda APENAS com o JSON válido, sem texto adicional`;
 
     // Call AI API
     const aiResponse = await callOpenRouterAPI(prompt);
     const ideiaCompleta = parseIdeiaResponse(aiResponse);
 
-    // Save to database with new structure including trend
+    // Save to database with new structure including hooks
     const { data: savedIdeia, error: saveError } = await supabase
       .from('ideias_virais')
       .insert([
@@ -244,6 +293,7 @@ INSTRUÇÕES:
           formato: ideiaCompleta.formato,
           plataforma_alvo: ideiaCompleta.plataforma_alvo,
           tendencia_utilizada: ideiaCompleta.tendencia_utilizada,
+          ganchos_sugeridos: ideiaCompleta.ganchos_sugeridos || [],
           user_id: user.id,
         },
       ])
@@ -255,7 +305,7 @@ INSTRUÇÕES:
       // Don't fail the operation if save fails
     }
 
-    // Log successful interaction with trend info
+    // Log successful interaction with hooks info
     await supabase.from('logs').insert({
       event: 'idea_generated',
       user_id: user.id,
@@ -267,9 +317,11 @@ INSTRUÇÕES:
         formato: ideiaCompleta.formato,
         plataforma_alvo: ideiaCompleta.plataforma_alvo,
         tendencia_utilizada: ideiaCompleta.tendencia_utilizada,
+        hooks_generated: ideiaCompleta.ganchos_sugeridos?.length || 0,
         trending_context_available: emergingTrends.length > 0,
         emerging_trends_count: emergingTrends.length,
-        has_profile: !!(metadata.nomeEmpresa || metadata.nicho)
+        has_profile: !!(metadata.nomeEmpresa || metadata.nicho),
+        is_campaign: !!campaignContext
       },
       timestamp: new Date().toISOString()
     });
@@ -282,7 +334,8 @@ INSTRUÇÕES:
           'Content-Type': 'application/json',
           'X-RateLimit-Remaining': String(RATE_LIMIT_MAX - 1),
           'X-RateLimit-Reset': String(Date.now() + RATE_LIMIT_WINDOW),
-          'X-Trending-Context': emergingTrends.length > 0 ? 'true' : 'false'
+          'X-Trending-Context': emergingTrends.length > 0 ? 'true' : 'false',
+          'X-Hooks-Generated': String(ideiaCompleta.ganchos_sugeridos?.length || 0)
         } 
       }
     );

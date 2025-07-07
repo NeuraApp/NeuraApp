@@ -5,12 +5,25 @@ import Layout from '../components/Layout';
 import { useErrorHandler } from '@/hooks/useErrorHandler';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { useToast } from '@/hooks/useToast';
+import { Copy, Zap, TrendingUp, Target } from 'lucide-react';
 
 interface IdeiaGerada {
-  nome: string;
-  descricao: string;
-  redeSocial: string;
-  potencialViral: 'alto' | 'médio' | 'baixo';
+  conteudo: string;
+  categoria: string;
+  formato: string;
+  plataforma_alvo: string;
+  tendencia_utilizada?: string;
+  ganchos_sugeridos?: Array<{
+    texto_gancho: string;
+    potencial_retencao_score: number;
+    justificativa: string;
+  }>;
+}
+
+interface Gancho {
+  texto_gancho: string;
+  potencial_retencao_score: number;
+  justificativa: string;
 }
 
 export default function IdeiaViral() {
@@ -19,6 +32,7 @@ export default function IdeiaViral() {
   const { error, loading, handleAsyncError } = useErrorHandler();
   const [userName, setUserName] = useState<string | null>(null);
   const [ideia, setIdeia] = useState<IdeiaGerada | null>(null);
+  const [showHooks, setShowHooks] = useState(false);
 
   useEffect(() => {
     carregarUsuario();
@@ -65,7 +79,8 @@ export default function IdeiaViral() {
         },
         body: JSON.stringify({
           context: 'detailed_idea_generation',
-          format: 'structured'
+          format: 'structured',
+          include_hooks: true
         })
       });
 
@@ -77,28 +92,15 @@ export default function IdeiaViral() {
       const ideiaGerada = await response.json();
 
       // Validar se a resposta tem a estrutura esperada
-      if (!ideiaGerada.nome || !ideiaGerada.descricao) {
+      if (!ideiaGerada.conteudo || !ideiaGerada.categoria) {
         throw new Error('Resposta da IA em formato inválido');
       }
 
       setIdeia(ideiaGerada);
-
-      // Salvar no banco de dados
-      const { data: userData } = await supabase.auth.getUser();
-      if (userData?.user) {
-        const { error: saveError } = await supabase
-          .from('ideias_virais')
-          .insert([
-            {
-              conteudo: JSON.stringify(ideiaGerada),
-              user_id: userData.user.id,
-            },
-          ]);
-
-        if (saveError) {
-          console.warn('Erro ao salvar ideia:', saveError);
-          // Não falhar a operação se não conseguir salvar
-        }
+      
+      // Mostrar ganchos se foram gerados
+      if (ideiaGerada.ganchos_sugeridos && ideiaGerada.ganchos_sugeridos.length > 0) {
+        setShowHooks(true);
       }
 
       return ideiaGerada;
@@ -111,16 +113,26 @@ export default function IdeiaViral() {
     }
   };
 
-  const handleCopiar = async () => {
-    if (ideia) {
-      await handleAsyncError(async () => {
-        const texto = `${ideia.nome}\n\n${ideia.descricao}\n\nRede Social: ${ideia.redeSocial}\nPotencial Viral: ${ideia.potencialViral}`;
-        await navigator.clipboard.writeText(texto);
-        success('Ideia copiada para a área de transferência!');
-      }, 'copiar_ideia', {
-        customErrorMessage: 'Erro ao copiar ideia'
-      });
-    }
+  const handleCopiar = async (texto: string, tipo: string = 'ideia') => {
+    await handleAsyncError(async () => {
+      await navigator.clipboard.writeText(texto);
+      success(`${tipo} copiada para a área de transferência!`);
+    }, 'copiar_texto', {
+      customErrorMessage: 'Erro ao copiar texto'
+    });
+  };
+
+  const getBestHook = (ganchos: Gancho[]): Gancho | null => {
+    if (!ganchos || ganchos.length === 0) return null;
+    return ganchos.reduce((best, current) => 
+      current.potencial_retencao_score > best.potencial_retencao_score ? current : best
+    );
+  };
+
+  const getScoreColor = (score: number): string => {
+    if (score >= 85) return 'text-green-600 bg-green-50 border-green-200';
+    if (score >= 70) return 'text-yellow-600 bg-yellow-50 border-yellow-200';
+    return 'text-red-600 bg-red-50 border-red-200';
   };
 
   return (
@@ -151,29 +163,108 @@ export default function IdeiaViral() {
           )}
 
           {ideia && (
-            <div className="bg-gray-50 p-4 rounded-md border border-gray-300 mb-4 space-y-3">
-              <h3 className="font-semibold text-purple-700">{ideia.nome}</h3>
-              <p className="text-gray-700">{ideia.descricao}</p>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span className="bg-purple-100 px-2 py-1 rounded">
-                  {ideia.redeSocial}
-                </span>
-                <span className={`px-2 py-1 rounded ${
-                  ideia.potencialViral === 'alto' 
-                    ? 'bg-green-100 text-green-700'
-                    : ideia.potencialViral === 'médio'
-                    ? 'bg-yellow-100 text-yellow-700'
-                    : 'bg-gray-100 text-gray-700'
-                }`}>
-                  Potencial: {ideia.potencialViral}
-                </span>
+            <div className="space-y-6">
+              {/* Ideia Principal */}
+              <div className="bg-gray-50 p-4 rounded-md border border-gray-300 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-purple-700">💡 Sua Ideia Viral</h3>
+                  <button
+                    onClick={() => handleCopiar(ideia.conteudo, 'Ideia')}
+                    className="flex items-center gap-1 text-sm text-purple-600 hover:text-purple-800 transition-colors"
+                  >
+                    <Copy className="w-4 h-4" />
+                    Copiar
+                  </button>
+                </div>
+                
+                <p className="text-gray-700">{ideia.conteudo}</p>
+                
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                    {ideia.categoria}
+                  </span>
+                  <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
+                    {ideia.formato}
+                  </span>
+                  <span className="bg-green-100 text-green-700 px-2 py-1 rounded">
+                    {ideia.plataforma_alvo}
+                  </span>
+                </div>
+
+                {ideia.tendencia_utilizada && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <TrendingUp className="w-4 h-4 text-orange-500" />
+                    <span className="text-orange-700 bg-orange-50 px-2 py-1 rounded border border-orange-200">
+                      Tendência: {ideia.tendencia_utilizada}
+                    </span>
+                  </div>
+                )}
               </div>
-              <button
-                onClick={handleCopiar}
-                className="mt-3 border border-purple-600 text-purple-600 bg-white hover:bg-purple-50 px-4 py-2 rounded-lg text-sm font-medium transition"
-              >
-                Copiar Ideia
-              </button>
+
+              {/* Ganchos A/B */}
+              {showHooks && ideia.ganchos_sugeridos && ideia.ganchos_sugeridos.length > 0 && (
+                <div className="bg-white border-2 border-purple-200 rounded-lg p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Zap className="w-6 h-6 text-purple-600" />
+                    <h3 className="text-lg font-semibold text-gray-800">🔥 Otimize seu Gancho</h3>
+                  </div>
+                  
+                  <p className="text-gray-600 mb-6">
+                    Escolha o melhor gancho para os primeiros 3 segundos do seu conteúdo:
+                  </p>
+
+                  <div className="grid gap-4">
+                    {ideia.ganchos_sugeridos.map((gancho, index) => {
+                      const isBest = getBestHook(ideia.ganchos_sugeridos!)?.texto_gancho === gancho.texto_gancho;
+                      
+                      return (
+                        <div
+                          key={index}
+                          className={`p-4 rounded-lg border-2 transition-all ${
+                            isBest 
+                              ? 'border-purple-500 bg-purple-50' 
+                              : 'border-gray-200 bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-600">
+                                Gancho {index + 1}
+                              </span>
+                              {isBest && (
+                                <span className="bg-purple-600 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1">
+                                  <Target className="w-3 h-3" />
+                                  Recomendado
+                                </span>
+                              )}
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              <span className={`text-sm font-bold px-2 py-1 rounded border ${getScoreColor(gancho.potencial_retencao_score)}`}>
+                                {gancho.potencial_retencao_score}/100
+                              </span>
+                              <button
+                                onClick={() => handleCopiar(gancho.texto_gancho, 'Gancho')}
+                                className="text-purple-600 hover:text-purple-800 transition-colors"
+                              >
+                                <Copy className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                          
+                          <p className="text-gray-800 font-medium mb-2">
+                            "{gancho.texto_gancho}"
+                          </p>
+                          
+                          <p className="text-sm text-gray-600">
+                            💡 {gancho.justificativa}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

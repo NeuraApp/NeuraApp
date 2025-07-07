@@ -11,6 +11,7 @@ import IdeiaViral from "./pages/IdeiaViral";
 import IdeiasGravadas from "./pages/IdeiasGravadas";
 import Analytics from "./pages/Analytics";
 import Preferencias from "./pages/Preferencias";
+import Campanhas from "./pages/Campanhas";
 import Pricing from "./pages/Pricing";
 import Payment from "./pages/Payment";
 import AdminSubscriptions from "./pages/admin/Subscriptions";
@@ -34,6 +35,7 @@ function App() {
         <Route path="/ideias-salvas" element={<ProtectedRoute><IdeiasGravadas /></ProtectedRoute>} />
         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
         <Route path="/preferencias" element={<ProtectedRoute><Preferencias /></ProtectedRoute>} />
+        <Route path="/campanhas" element={<ProtectedRoute><Campanhas /></ProtectedRoute>} />
         <Route path="/admin/subscriptions" element={<ProtectedRoute><AdminSubscriptions /></ProtectedRoute>} />
         <Route path="/account/subscription" element={<ProtectedRoute><AccountSubscription /></ProtectedRoute>} />
       </Routes>
