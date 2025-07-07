@@ -44,25 +44,16 @@ export function useSubscription(): SubscriptionState {
           .from('subscriptions')
           .select('*')
           .eq('user_id', session.user.id)
-          .single();
+          .maybeSingle();
 
         if (error) {
-          if (error.code === 'PGRST116') {
-            // No subscription found - this is expected for free users
-            setSubscription(null);
-          } else {
-            // Only log unexpected errors
-            console.error('Error loading subscription:', error);
-            setSubscription(null);
-          }
+          console.error('Error loading subscription:', error);
+          setSubscription(null);
         } else {
           setSubscription(data);
         }
       } catch (err: any) {
-        // Handle any unexpected errors that weren't caught by the Supabase error handling
-        if (err?.code !== 'PGRST116') {
-          console.error('Unexpected error loading subscription:', err);
-        }
+        console.error('Unexpected error loading subscription:', err);
         setSubscription(null);
       } finally {
         setLoading(false);
