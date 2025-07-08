@@ -21,7 +21,7 @@ interface IdeiaGeradaCompleta {
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const openRouterKey = Deno.env.get('OPENROUTER_API_KEY')!;
+const geminiApiKey = Deno.env.get('GEMINI_API_KEY')!;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -48,6 +48,25 @@ async function checkRateLimit(userId: string): Promise<void> {
   if (count && count >= RATE_LIMIT_MAX) {
     throw new Error(`Rate limit exceeded. Maximum ${RATE_LIMIT_MAX} requests per hour.`);
   }
+}
+
+async function getSystemConfig(): Promise<{ system_prompt: string; llm_provider: string }> {
+  const { data, error } = await supabase
+    .from('system_preferences')
+    .select('system_prompt, llm_provider')
+    .eq('id', 'global_config')
+    .single();
+
+  if (error) {
+    console.error('Error fetching system config:', error);
+    // Fallback para configuração padrão
+    return {
+      system_prompt: 'Você é NEURA, uma IA especialista em conteúdo viral. Responda sempre em formato JSON estruturado.',
+      llm_provider: 'gemini-pro'
+    };
+  }
+
+  return data;
 }
 
 async function getEmergingTrends(userNicho?: string): Promise<string[]> {
@@ -90,43 +109,59 @@ async function getEmergingTrends(userNicho?: string): Promise<string[]> {
   }
 }
 
-async function callOpenRouterAPI(prompt: string): Promise<string> {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${openRouterKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://neura.app',
-      'X-Title': 'NEURA - AI Content Generator'
-    },
-    body: JSON.stringify({
-      model: 'openai/gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'system',
-          content: 'Você é um especialista em marketing viral e criação de conteúdo para redes sociais. Sempre responda em português brasileiro com JSON válido.'
+async function callGeminiAPI(prompt: string): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiApiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.8,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 1200,
         },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.8,
-      max_tokens: 1200 // Aumentado para acomodar ganchos
-    })
-  });
+        safetySettings: [
+          {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_HATE_SPEECH",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          }
+        ]
+      })
+    }
+  );
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('OpenRouter API Error:', response.status, errorText);
-    throw new Error(`Erro na API de IA: ${response.status}`);
+    console.error('Gemini API Error:', response.status, errorText);
+    throw new Error(`Erro na API Gemini: ${response.status}`);
   }
 
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (!content) {
-    throw new Error('Resposta inválida da API de IA');
+    throw new Error('Resposta inválida da API Gemini');
   }
 
   return content.trim();
@@ -196,6 +231,9 @@ Deno.serve(async (req) => {
     // Get user profile for personalization
     const metadata = user.user_metadata || {};
     
+    // Obter configurações do sistema
+    const systemConfig = await getSystemConfig();
+    
     // 🚀 NOVA FUNCIONALIDADE: Buscar tendências emergentes
     const emergingTrends = await getEmergingTrends(metadata.nicho);
     
@@ -249,7 +287,9 @@ INSTRUÇÃO: Crie uma ideia que se alinhe perfeitamente com esta etapa específi
   ]`;
     }
 
-    const prompt = `Crie uma ideia viral estruturada para redes sociais seguindo EXATAMENTE este formato JSON:
+    const prompt = `${systemConfig.system_prompt}
+
+Crie uma ideia viral estruturada para redes sociais seguindo EXATAMENTE este formato JSON:
 
 {
   "conteudo": "Descrição detalhada da ideia em até 300 caracteres",
@@ -279,8 +319,8 @@ INSTRUÇÕES:
 - Justifique cada score com base em padrões virais conhecidos` : ''}
 - Responda APENAS com o JSON válido, sem texto adicional`;
 
-    // Call AI API
-    const aiResponse = await callOpenRouterAPI(prompt);
+    // Call Gemini API
+    const aiResponse = await callGeminiAPI(prompt);
     const ideiaCompleta = parseIdeiaResponse(aiResponse);
 
     // Save to database with new structure including hooks
@@ -321,7 +361,8 @@ INSTRUÇÕES:
         trending_context_available: emergingTrends.length > 0,
         emerging_trends_count: emergingTrends.length,
         has_profile: !!(metadata.nomeEmpresa || metadata.nicho),
-        is_campaign: !!campaignContext
+        is_campaign: !!campaignContext,
+        llm_provider: systemConfig.llm_provider
       },
       timestamp: new Date().toISOString()
     });
@@ -335,7 +376,8 @@ INSTRUÇÕES:
           'X-RateLimit-Remaining': String(RATE_LIMIT_MAX - 1),
           'X-RateLimit-Reset': String(Date.now() + RATE_LIMIT_WINDOW),
           'X-Trending-Context': emergingTrends.length > 0 ? 'true' : 'false',
-          'X-Hooks-Generated': String(ideiaCompleta.ganchos_sugeridos?.length || 0)
+          'X-Hooks-Generated': String(ideiaCompleta.ganchos_sugeridos?.length || 0),
+          'X-LLM-Provider': systemConfig.llm_provider
         } 
       }
     );
@@ -353,7 +395,7 @@ INSTRUÇÕES:
     } else if (error.message.includes('Rate limit')) {
       statusCode = 429;
       errorMessage = 'Limite de requisições excedido. Tente novamente em 1 hora.';
-    } else if (error.message.includes('API de IA')) {
+    } else if (error.message.includes('API Gemini')) {
       statusCode = 503;
       errorMessage = 'Serviço de IA temporariamente indisponível';
     }

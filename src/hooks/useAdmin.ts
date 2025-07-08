@@ -16,8 +16,8 @@ export function useAdmin() {
       }
 
       try {
-        // Verificar role no servidor via edge function
-        const { data, error } = await supabase.rpc('check_admin_status');
+        // Verificar role no servidor via RPC function
+        const { data, error } = await supabase.rpc('is_admin');
         
         if (error) {
           console.error('Error checking admin status:', error);

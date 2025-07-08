@@ -34,7 +34,7 @@ function App() {
         <Route path="/ideia-viral" element={<ProtectedRoute><IdeiaViral /></ProtectedRoute>} />
         <Route path="/ideias-salvas" element={<ProtectedRoute><IdeiasGravadas /></ProtectedRoute>} />
         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
-        <Route path="/preferencias" element={<ProtectedRoute><Preferencias /></ProtectedRoute>} />
+        <Route path="/preferencias" element={<ProtectedRoute adminOnly={true}><Preferencias /></ProtectedRoute>} />
         <Route path="/campanhas" element={<ProtectedRoute><Campanhas /></ProtectedRoute>} />
         <Route path="/admin/subscriptions" element={<ProtectedRoute><AdminSubscriptions /></ProtectedRoute>} />
         <Route path="/account/subscription" element={<ProtectedRoute><AccountSubscription /></ProtectedRoute>} />
