@@ -1,13 +1,34 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
-import { useErrorHandler } from '@/hooks/useErrorHandler';
-import { ErrorMessage } from '@/components/ErrorMessage';
-import { useToast } from '@/hooks/useToast';
-import { Copy, Zap, TrendingUp, Target } from 'lucide-react';
+import { useSubscription } from '../hooks/useSubscription';
+import { useToast } from '../hooks/useToast';
+import { 
+  Sparkles, 
+  Zap, 
+  TrendingUp, 
+  Target,
+  Instagram,
+  Youtube,
+  Music,
+  Twitter,
+  Linkedin,
+  Video,
+  List,
+  MessageCircle,
+  Play,
+  BookOpen,
+  HelpCircle,
+  Lightbulb,
+  Copy,
+  Star,
+  Clock,
+  BarChart3
+} from 'lucide-react';
 
 interface IdeiaGerada {
+  id?: string;
   conteudo: string;
   categoria: string;
   formato: string;
@@ -18,274 +39,413 @@ interface IdeiaGerada {
     potencial_retencao_score: number;
     justificativa: string;
   }>;
+  created_at?: string;
 }
 
-interface Gancho {
-  texto_gancho: string;
-  potencial_retencao_score: number;
-  justificativa: string;
-}
+const PLATAFORMAS = [
+  { id: 'Instagram', name: 'Instagram', icon: Instagram, color: 'text-pink-600' },
+  { id: 'TikTok', name: 'TikTok', icon: Music, color: 'text-black' },
+  { id: 'YouTube', name: 'YouTube', icon: Youtube, color: 'text-red-600' },
+  { id: 'LinkedIn', name: 'LinkedIn', icon: Linkedin, color: 'text-blue-600' },
+  { id: 'Twitter', name: 'Twitter', icon: Twitter, color: 'text-blue-400' }
+];
+
+const FORMATOS = [
+  { id: 'Tutorial', name: 'Tutorial', icon: BookOpen, description: 'Ensine algo passo a passo' },
+  { id: 'POV', name: 'POV', icon: MessageCircle, description: 'Point of view / Perspectiva' },
+  { id: 'Lista', name: 'Lista', icon: List, description: 'Top 5, dicas, etc.' },
+  { id: 'Reação', name: 'Reação', icon: Play, description: 'Reaja a algo viral' },
+  { id: 'Desafio', name: 'Desafio', icon: Target, description: 'Challenge ou trend' },
+  { id: 'Pergunta', name: 'Pergunta', icon: HelpCircle, description: 'Engaje com perguntas' }
+];
 
 export default function IdeiaViral() {
   const navigate = useNavigate();
-  const { success } = useToast();
-  const { error, loading, handleAsyncError } = useErrorHandler();
-  const [userName, setUserName] = useState<string | null>(null);
-  const [ideia, setIdeia] = useState<IdeiaGerada | null>(null);
-  const [showHooks, setShowHooks] = useState(false);
+  const location = useLocation();
+  const { subscription, isActive, isPro } = useSubscription();
+  const { success, error } = useToast();
+  
+  const [userName, setUserName] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [temaUsuario, setTemaUsuario] = useState<string>('');
+  const [plataformaSelecionada, setPlataformaSelecionada] = useState<string>('');
+  const [formatoSelecionado, setFormatoSelecionado] = useState<string>('');
+  const [ideiasGeradas, setIdeiasGeradas] = useState<IdeiaGerada[]>([]);
+  const [historicoSessao, setHistoricoSessao] = useState<IdeiaGerada[]>([]);
 
   useEffect(() => {
     carregarUsuario();
-  }, []);
+    
+    // Verificar se veio com contexto do dashboard
+    if (location.state) {
+      const { trendContext, categoryFilter } = location.state;
+      if (trendContext) {
+        setTemaUsuario(`Criar conteúdo sobre: ${trendContext.trend_name}`);
+      }
+      if (categoryFilter) {
+        // Pré-selecionar filtros baseado no contexto
+        console.log('Category filter:', categoryFilter);
+      }
+    }
+  }, [location.state]);
 
   const carregarUsuario = async () => {
-    await handleAsyncError(async () => {
-      const { data, error } = await supabase.auth.getUser();
-
-      if (error || !data?.user) {
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
         navigate('/login');
         return;
       }
 
-      const nome = data.user.user_metadata?.name || data.user.user_metadata?.nome || 'Usuário';
-      setUserName(nome);
-    }, 'carregar_usuario', {
-      customErrorMessage: 'Erro ao carregar dados do usuário'
-    });
-  };
-
-  const handleLogout = async () => {
-    await handleAsyncError(async () => {
-      await supabase.auth.signOut();
-      navigate('/login');
-    }, 'logout', {
-      customErrorMessage: 'Erro ao fazer logout'
-    });
-  };
-
-  const gerarIdeiaComIA = async () => {
-    const result = await handleAsyncError(async () => {
-      // Usar edge function em vez de chamar API diretamente
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('Sessão não encontrada');
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gerar-ideia`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          context: 'detailed_idea_generation',
-          format: 'structured',
-          include_hooks: true
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Erro ${response.status} ao gerar ideia`);
-      }
-
-      const ideiaGerada = await response.json();
-
-      // Validar se a resposta tem a estrutura esperada
-      if (!ideiaGerada.conteudo || !ideiaGerada.categoria) {
-        throw new Error('Resposta da IA em formato inválido');
-      }
-
-      setIdeia(ideiaGerada);
+      const metadata = user.user_metadata || {};
+      setUserName(metadata.nome || metadata.name || user.email?.split('@')[0] || 'Usuário');
       
-      // Mostrar ganchos se foram gerados
-      if (ideiaGerada.ganchos_sugeridos && ideiaGerada.ganchos_sugeridos.length > 0) {
-        setShowHooks(true);
-      }
-
-      return ideiaGerada;
-    }, 'gerar_ideia', {
-      customErrorMessage: 'Erro ao gerar ideia. Verifique suas configurações de IA nas Preferências.'
-    });
-
-    if (result) {
-      success('Ideia gerada com sucesso!');
+    } catch (err) {
+      console.error('Erro ao carregar usuário:', err);
+      error('Erro ao carregar dados do usuário');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleCopiar = async (texto: string, tipo: string = 'ideia') => {
-    await handleAsyncError(async () => {
-      await navigator.clipboard.writeText(texto);
-      success(`${tipo} copiada para a área de transferência!`);
-    }, 'copiar_texto', {
-      customErrorMessage: 'Erro ao copiar texto'
-    });
+  const handleOtimizarEGerar = () => {
+    console.log('Otimizar e Gerar Ideias clicked');
+    console.log('Tema:', temaUsuario);
+    console.log('Plataforma:', plataformaSelecionada);
+    console.log('Formato:', formatoSelecionado);
+    // Lógica será implementada na próxima etapa
   };
 
-  const getBestHook = (ganchos: Gancho[]): Gancho | null => {
-    if (!ganchos || ganchos.length === 0) return null;
-    return ganchos.reduce((best, current) => 
-      current.potencial_retencao_score > best.potencial_retencao_score ? current : best
+  const handleMeSurpreenda = () => {
+    console.log('Me Surpreenda clicked');
+    console.log('Buscar tendência viral');
+    // Lógica será implementada na próxima etapa
+  };
+
+  const handleCopiarIdeia = (conteudo: string) => {
+    navigator.clipboard.writeText(conteudo);
+    success('Ideia copiada para a área de transferência!');
+  };
+
+  const formatarDataRelativa = (timestamp: string) => {
+    const agora = new Date();
+    const data = new Date(timestamp);
+    const diffMs = agora.getTime() - data.getTime();
+    const diffMinutos = Math.floor(diffMs / (1000 * 60));
+    
+    if (diffMinutos < 1) return 'Agora';
+    if (diffMinutos < 60) return `${diffMinutos}min atrás`;
+    const diffHoras = Math.floor(diffMinutos / 60);
+    if (diffHoras < 24) return `${diffHoras}h atrás`;
+    return data.toLocaleDateString('pt-BR');
+  };
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+        </div>
+      </Layout>
     );
-  };
-
-  const getScoreColor = (score: number): string => {
-    if (score >= 85) return 'text-green-600 bg-green-50 border-green-200';
-    if (score >= 70) return 'text-yellow-600 bg-yellow-50 border-yellow-200';
-    return 'text-red-600 bg-red-50 border-red-200';
-  };
+  }
 
   return (
     <Layout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-gray-800">Olá, {userName} 👋</h1>
-          <button
-            onClick={handleLogout}
-            className="text-sm bg-red-50 hover:bg-red-100 text-red-600 px-4 py-2 rounded-lg border border-red-200 transition"
-          >
-            Sair
-          </button>
+      <div className="max-w-6xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-2">
+            Gerador de Ideias Virais
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Olá, {userName}! Vamos criar conteúdo que engaja e converte?
+          </p>
         </div>
 
-        <section className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">💡 Gerador de Ideias Virais com IA</h2>
-          <p className="text-gray-700 mb-4">
-            Use inteligência artificial para gerar ideias criativas e virais para suas redes sociais
-          </p>
-
-          {error && (
-            <ErrorMessage 
-              error={error} 
-              onRetry={gerarIdeiaComIA}
-              className="mb-4"
-            />
-          )}
-
-          {ideia && (
-            <div className="space-y-6">
-              {/* Ideia Principal */}
-              <div className="bg-gray-50 p-4 rounded-md border border-gray-300 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-purple-700">💡 Sua Ideia Viral</h3>
-                  <button
-                    onClick={() => handleCopiar(ideia.conteudo, 'Ideia')}
-                    className="flex items-center gap-1 text-sm text-purple-600 hover:text-purple-800 transition-colors"
-                  >
-                    <Copy className="w-4 h-4" />
-                    Copiar
-                  </button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Coluna Principal - Cérebro de Geração */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Cérebro de Geração Central */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg">
+                  <Lightbulb className="w-6 h-6 text-white" />
                 </div>
-                
-                <p className="text-gray-700">{ideia.conteudo}</p>
-                
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded">
-                    {ideia.categoria}
-                  </span>
-                  <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded">
-                    {ideia.formato}
-                  </span>
-                  <span className="bg-green-100 text-green-700 px-2 py-1 rounded">
-                    {ideia.plataforma_alvo}
-                  </span>
-                </div>
-
-                {ideia.tendencia_utilizada && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <TrendingUp className="w-4 h-4 text-orange-500" />
-                    <span className="text-orange-700 bg-orange-50 px-2 py-1 rounded border border-orange-200">
-                      Tendência: {ideia.tendencia_utilizada}
-                    </span>
-                  </div>
-                )}
+                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
+                  Cérebro de Geração
+                </h2>
               </div>
 
-              {/* Ganchos A/B */}
-              {showHooks && ideia.ganchos_sugeridos && ideia.ganchos_sugeridos.length > 0 && (
-                <div className="bg-white border-2 border-purple-200 rounded-lg p-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Zap className="w-6 h-6 text-purple-600" />
-                    <h3 className="text-lg font-semibold text-gray-800">🔥 Otimize seu Gancho</h3>
-                  </div>
-                  
-                  <p className="text-gray-600 mb-6">
-                    Escolha o melhor gancho para os primeiros 3 segundos do seu conteúdo:
-                  </p>
+              {/* Campo de Texto Principal */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Sobre o que você quer criar hoje?
+                </label>
+                <textarea
+                  value={temaUsuario}
+                  onChange={(e) => setTemaUsuario(e.target.value)}
+                  className="w-full h-32 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                  placeholder="Descreva seu tema ou ideia aqui... Ex: 'Como fazer pão de queijo fit', 'Dicas de investimento para iniciantes', 'Tutorial de maquiagem natural'"
+                />
+              </div>
 
-                  <div className="grid gap-4">
-                    {ideia.ganchos_sugeridos.map((gancho, index) => {
-                      const isBest = getBestHook(ideia.ganchos_sugeridos!)?.texto_gancho === gancho.texto_gancho;
-                      
-                      return (
-                        <div
-                          key={index}
-                          className={`p-4 rounded-lg border-2 transition-all ${
-                            isBest 
-                              ? 'border-purple-500 bg-purple-50' 
-                              : 'border-gray-200 bg-gray-50'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-600">
-                                Gancho {index + 1}
-                              </span>
-                              {isBest && (
-                                <span className="bg-purple-600 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1">
-                                  <Target className="w-3 h-3" />
-                                  Recomendado
-                                </span>
-                              )}
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                              <span className={`text-sm font-bold px-2 py-1 rounded border ${getScoreColor(gancho.potencial_retencao_score)}`}>
-                                {gancho.potencial_retencao_score}/100
-                              </span>
-                              <button
-                                onClick={() => handleCopiar(gancho.texto_gancho, 'Gancho')}
-                                className="text-purple-600 hover:text-purple-800 transition-colors"
-                              >
-                                <Copy className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <p className="text-gray-800 font-medium mb-2">
-                            "{gancho.texto_gancho}"
-                          </p>
-                          
-                          <p className="text-sm text-gray-600">
-                            💡 {gancho.justificativa}
-                          </p>
+              {/* Botões de Ação */}
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button
+                  onClick={handleOtimizarEGerar}
+                  disabled={generating}
+                  className="flex-1 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold px-6 py-4 rounded-xl transition-all duration-300 transform hover:scale-105 flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {generating ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Gerando...
+                    </>
+                  ) : (
+                    <>
+                      <Target className="w-5 h-5" />
+                      Otimizar e Gerar Ideias
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleMeSurpreenda}
+                  disabled={generating}
+                  className="flex-1 bg-white dark:bg-gray-700 border-2 border-purple-600 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-gray-600 font-semibold px-6 py-4 rounded-xl transition-all duration-300 transform hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles className="w-5 h-5" />
+                  ✨ Me Surpreenda (Buscar Tendência Viral)
+                </button>
+              </div>
+            </div>
+
+            {/* Seção de Filtros */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" />
+                Refine sua Busca
+              </h3>
+
+              {/* Filtro de Plataforma */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  Plataforma Alvo
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {PLATAFORMAS.map((plataforma) => {
+                    const Icon = plataforma.icon;
+                    const isSelected = plataformaSelecionada === plataforma.id;
+                    
+                    return (
+                      <button
+                        key={plataforma.id}
+                        onClick={() => setPlataformaSelecionada(isSelected ? '' : plataforma.id)}
+                        className={`p-3 rounded-lg border-2 transition-all duration-200 flex flex-col items-center gap-2 ${
+                          isSelected
+                            ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-purple-300 dark:hover:border-purple-500'
+                        }`}
+                      >
+                        <Icon className={`w-6 h-6 ${isSelected ? 'text-purple-600' : plataforma.color}`} />
+                        <span className={`text-xs font-medium ${
+                          isSelected ? 'text-purple-600' : 'text-gray-600 dark:text-gray-400'
+                        }`}>
+                          {plataforma.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Filtro de Formato */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  Formato de Conteúdo
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {FORMATOS.map((formato) => {
+                    const Icon = formato.icon;
+                    const isSelected = formatoSelecionado === formato.id;
+                    
+                    return (
+                      <button
+                        key={formato.id}
+                        onClick={() => setFormatoSelecionado(isSelected ? '' : formato.id)}
+                        className={`p-4 rounded-lg border-2 transition-all duration-200 text-left ${
+                          isSelected
+                            ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-purple-300 dark:hover:border-purple-500'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 mb-2">
+                          <Icon className={`w-5 h-5 ${isSelected ? 'text-purple-600' : 'text-gray-600 dark:text-gray-400'}`} />
+                          <span className={`font-medium ${
+                            isSelected ? 'text-purple-600' : 'text-gray-800 dark:text-white'
+                          }`}>
+                            {formato.name}
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {formato.description}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Área de Resultados */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <Zap className="w-5 h-5" />
+                Suas Ideias Geniais
+              </h3>
+
+              {ideiasGeradas.length > 0 ? (
+                <div className="space-y-4">
+                  {ideiasGeradas.map((ideia, index) => (
+                    <div
+                      key={ideia.id || index}
+                      className="p-4 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 rounded">
+                            {ideia.categoria}
+                          </span>
+                          <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded">
+                            {ideia.formato}
+                          </span>
+                          <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 rounded">
+                            {ideia.plataforma_alvo}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleCopiarIdeia(ideia.conteudo)}
+                          className="text-gray-400 hover:text-purple-600 transition-colors"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                      
+                      <p className="text-gray-800 dark:text-white mb-2">
+                        {ideia.conteudo}
+                      </p>
+                      
+                      {ideia.tendencia_utilizada && (
+                        <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400">
+                          <TrendingUp className="w-4 h-4" />
+                          <span>Tendência: {ideia.tendencia_utilizada}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <Lightbulb className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                  <h4 className="text-lg font-medium text-gray-800 dark:text-white mb-2">
+                    Suas ideias geniais aparecerão aqui
+                  </h4>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    Digite um tema acima e clique em um dos botões para começar a gerar ideias incríveis!
+                  </p>
                 </div>
               )}
             </div>
-          )}
+          </div>
 
-          <button
-            className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            onClick={gerarIdeiaComIA}
-            disabled={loading}
-          >
-            {loading ? (
-              <>
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Gerando ideia...
-              </>
-            ) : (
-              'Gerar nova ideia'
+          {/* Sidebar - Histórico da Sessão */}
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5" />
+                Histórico da Sessão
+              </h3>
+
+              {historicoSessao.length > 0 ? (
+                <div className="space-y-3">
+                  {historicoSessao.slice(0, 5).map((ideia, index) => (
+                    <div
+                      key={index}
+                      className="p-3 border border-gray-200 dark:border-gray-600 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      onClick={() => handleCopiarIdeia(ideia.conteudo)}
+                    >
+                      <p className="text-sm text-gray-800 dark:text-white line-clamp-2 mb-2">
+                        {ideia.conteudo.length > 80 
+                          ? `${ideia.conteudo.substring(0, 80)}...` 
+                          : ideia.conteudo}
+                      </p>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-purple-600 dark:text-purple-400">
+                          {ideia.categoria}
+                        </span>
+                        {ideia.created_at && (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">
+                            {formatarDataRelativa(ideia.created_at)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <Clock className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Suas ideias desta sessão aparecerão aqui
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Dicas Rápidas */}
+            <div className="bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl p-6 border border-purple-200 dark:border-purple-800">
+              <h4 className="text-lg font-semibold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                <Star className="w-5 h-5 text-yellow-500" />
+                Dicas Pro
+              </h4>
+              <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                <li className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0"></span>
+                  Seja específico no seu tema para ideias mais direcionadas
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0"></span>
+                  Use "Me Surpreenda" para descobrir tendências emergentes
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0"></span>
+                  Combine diferentes formatos para variar seu conteúdo
+                </li>
+              </ul>
+            </div>
+
+            {/* Call to Action para Upgrade */}
+            {!isActive && (
+              <div className="bg-gradient-to-r from-purple-600 to-blue-600 rounded-xl p-6 text-white">
+                <h4 className="text-lg font-semibold mb-2">
+                  🚀 Desbloqueie o Poder Total
+                </h4>
+                <p className="text-sm text-purple-100 mb-4">
+                  Ganchos A/B testados, insights preditivos e ideias ilimitadas com o Pro.
+                </p>
+                <button
+                  onClick={() => navigate('/pricing')}
+                  className="w-full bg-white text-purple-600 font-semibold py-2 px-4 rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  Fazer Upgrade
+                </button>
+              </div>
             )}
-          </button>
-        </section>
+          </div>
+        </div>
       </div>
     </Layout>
   );
