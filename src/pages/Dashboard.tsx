@@ -1,236 +1,506 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
-import { useDebounce } from '../hooks/useDebounce';
+import { useSubscription } from '../hooks/useSubscription';
 import { useToast } from '../hooks/useToast';
-import { useErrorHandler } from '../hooks/useErrorHandler';
+import { 
+  Sparkles, 
+  TrendingUp, 
+  Target, 
+  BarChart3, 
+  Calendar,
+  ArrowRight,
+  Zap,
+  Clock,
+  Star,
+  Activity,
+  Users,
+  Brain
+} from 'lucide-react';
+
+interface DashboardKPIs {
+  ideiasGeradasMes: number;
+  campanhasAtivas: number;
+  scoreMedioGanchos: number;
+}
+
+interface DashboardInsight {
+  id: string;
+  type: 'trend' | 'performance' | 'recommendation';
+  title: string;
+  description: string;
+  action_text: string;
+  action_data: any;
+  priority: number;
+}
+
+interface CampanhaAtiva {
+  id: string;
+  objetivo_principal: string;
+  status: string;
+  total_etapas: number;
+  etapas_publicadas: number;
+  data_inicio: string;
+  data_fim: string;
+}
+
+interface AtividadeRecente {
+  id: string;
+  event: string;
+  timestamp: string;
+  metadata?: any;
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { success, error: showError } = useToast();
-  const { error, loading: errorLoading, handleAsyncError } = useErrorHandler();
-  const [userName, setUserName] = useState<string | null>(null);
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const { subscription, isActive, isPro } = useSubscription();
+  const { success, error } = useToast();
+  const [userName, setUserName] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [gerando, setGerando] = useState(false);
-  const [novaIdeia, setNovaIdeia] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-
-  const debouncedGerarIdeia = useDebounce(() => gerarIdeia(), 2000);
+  const [kpis, setKpis] = useState<DashboardKPIs>({
+    ideiasGeradasMes: 0,
+    campanhasAtivas: 0,
+    scoreMedioGanchos: 0
+  });
+  const [insights, setInsights] = useState<DashboardInsight[]>([]);
+  const [campanhasAtivas, setCampanhasAtivas] = useState<CampanhaAtiva[]>([]);
+  const [atividadeRecente, setAtividadeRecente] = useState<AtividadeRecente[]>([]);
 
   useEffect(() => {
-    const getUser = async () => {
-      try {
-        const {
-          data: { user },
-          error,
-        } = await supabase.auth.getUser();
+    carregarDadosDashboard();
+  }, []);
 
-        if (error || !user) {
-          navigate('/login');
-          return;
-        }
-
-        const metadata = user.user_metadata || {};
-        setUserName(metadata.nome || user.email);
-        setAvatarUrl(metadata.avatar_url || null);
-        setUserId(user.id);
-        setLoading(false);
-      } catch (err) {
-        console.error('Erro ao carregar usuário:', err);
-        showError('Erro ao carregar dados do usuário');
-        setLoading(false);
-      }
-    };
-
-    getUser();
-  }, [navigate, showError]);
-
-  const salvarIdeiaNoSupabase = async (ideia: string, userId: string): Promise<void> => {
+  const carregarDadosDashboard = async () => {
     try {
-      if (!ideia.trim()) {
-        throw new Error('A ideia não pode estar vazia');
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        navigate('/login');
+        return;
       }
 
-      const { error } = await supabase.from('ideias_virais').insert({
-        user_id: userId,
-        conteudo: ideia,
-      });
+      const metadata = user.user_metadata || {};
+      setUserName(metadata.nome || metadata.name || user.email?.split('@')[0] || 'Usuário');
 
-      if (error) throw error;
+      // Carregar KPIs em paralelo
+      await Promise.all([
+        carregarKPIs(user.id),
+        carregarInsights(),
+        carregarCampanhasAtivas(user.id),
+        carregarAtividadeRecente(user.id)
+      ]);
 
-      success('Ideia salva com sucesso!');
     } catch (err) {
-      if (err instanceof Error) {
-        showError(err.message);
-      } else {
-        showError('Erro ao salvar ideia');
-      }
-      throw err;
+      console.error('Erro ao carregar dashboard:', err);
+      error('Erro ao carregar dados do dashboard');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const gerarIdeia = async () => {
-    if (!userId) {
-      showError('Usuário não autenticado');
-      return;
-    }
+  const carregarKPIs = async (userId: string) => {
+    try {
+      const inicioMes = new Date();
+      inicioMes.setDate(1);
+      inicioMes.setHours(0, 0, 0, 0);
 
-    const result = await handleAsyncError(async () => {
-      setGerando(true);
+      // KPI 1: Ideias geradas este mês
+      const { count: ideiasCount } = await supabase
+        .from('ideias_virais')
+        .select('*', { count: 'exact' })
+        .eq('user_id', userId)
+        .gte('created_at', inicioMes.toISOString());
 
-      // Usar edge function em vez de chamar API diretamente
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('Sessão não encontrada');
+      // KPI 2: Campanhas ativas
+      const { count: campanhasCount } = await supabase
+        .from('campanhas')
+        .select('*', { count: 'exact' })
+        .eq('user_id', userId)
+        .eq('status', 'ativa');
+
+      // KPI 3: Score médio dos ganchos
+      const { data: ideiasComGanchos } = await supabase
+        .from('ideias_virais')
+        .select('ganchos_sugeridos')
+        .eq('user_id', userId)
+        .not('ganchos_sugeridos', 'eq', '[]')
+        .gte('created_at', inicioMes.toISOString());
+
+      let scoreMedio = 0;
+      if (ideiasComGanchos && ideiasComGanchos.length > 0) {
+        let totalScores = 0;
+        let countScores = 0;
+
+        ideiasComGanchos.forEach(ideia => {
+          const ganchos = ideia.ganchos_sugeridos || [];
+          ganchos.forEach((gancho: any) => {
+            if (gancho.potencial_retencao_score) {
+              totalScores += gancho.potencial_retencao_score;
+              countScores++;
+            }
+          });
+        });
+
+        scoreMedio = countScores > 0 ? totalScores / countScores : 0;
       }
 
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gerar-ideia`, {
+      setKpis({
+        ideiasGeradasMes: ideiasCount || 0,
+        campanhasAtivas: campanhasCount || 0,
+        scoreMedioGanchos: Math.round(scoreMedio)
+      });
+
+    } catch (err) {
+      console.error('Erro ao carregar KPIs:', err);
+    }
+  };
+
+  const carregarInsights = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-dashboard-insights`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          context: 'dashboard_quick_idea'
-        })
+        }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Erro ${response.status} ao gerar ideia`);
+      if (response.ok) {
+        const data = await response.json();
+        setInsights(data.insights || []);
       }
-
-      const ideiaData = await response.json();
-      
-      // Se a resposta for um objeto estruturado, extrair o conteúdo
-      let ideiaTexto: string;
-      if (typeof ideiaData === 'object' && ideiaData.nome) {
-        ideiaTexto = `${ideiaData.nome}\n\n${ideiaData.descricao}\n\nRede Social: ${ideiaData.redeSocial}\nPotencial: ${ideiaData.potencialViral}`;
-      } else if (typeof ideiaData === 'string') {
-        ideiaTexto = ideiaData;
-      } else {
-        ideiaTexto = ideiaData.content || 'Ideia gerada com sucesso!';
-      }
-
-      setNovaIdeia(ideiaTexto);
-      await salvarIdeiaNoSupabase(ideiaTexto, userId);
-      
-      return ideiaTexto;
-    }, 'gerar_ideia', {
-      customErrorMessage: 'Erro ao gerar ideia. Verifique suas configurações de IA nas Preferências.'
-    });
-
-    setGerando(false);
+    } catch (err) {
+      console.error('Erro ao carregar insights:', err);
+    }
   };
 
-  const copiarIdeia = async () => {
-    if (novaIdeia) {
-      await handleAsyncError(async () => {
-        await navigator.clipboard.writeText(novaIdeia);
-        success('Ideia copiada para a área de transferência!');
-      }, 'copiar_ideia', {
-        customErrorMessage: 'Erro ao copiar ideia'
-      });
+  const carregarCampanhasAtivas = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('campaign_analytics')
+        .select('*')
+        .eq('user_id', userId)
+        .in('campanha_status', ['ativa', 'rascunho'])
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+      setCampanhasAtivas(data || []);
+    } catch (err) {
+      console.error('Erro ao carregar campanhas:', err);
+    }
+  };
+
+  const carregarAtividadeRecente = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('logs')
+        .select('event, timestamp, metadata')
+        .eq('user_id', userId)
+        .eq('success', true)
+        .in('event', ['idea_generated', 'campaign_generated', 'youtube_sync_completed', 'tiktok_sync_completed'])
+        .order('timestamp', { ascending: false })
+        .limit(5);
+
+      setAtividadeRecente(data?.map((item, index) => ({
+        id: `activity_${index}`,
+        event: item.event,
+        timestamp: item.timestamp,
+        metadata: item.metadata
+      })) || []);
+    } catch (err) {
+      console.error('Erro ao carregar atividade:', err);
+    }
+  };
+
+  const handleInsightAction = (insight: DashboardInsight) => {
+    switch (insight.type) {
+      case 'trend':
+        navigate('/ideia-viral', { 
+          state: { 
+            trendContext: insight.action_data 
+          }
+        });
+        break;
+      case 'performance':
+        navigate('/ideia-viral', { 
+          state: { 
+            categoryFilter: insight.action_data.categoria 
+          }
+        });
+        break;
+      case 'recommendation':
+        if (insight.action_data.action === 'create_campaign') {
+          navigate('/campanhas');
+        } else {
+          navigate('/ideia-viral');
+        }
+        break;
+    }
+  };
+
+  const formatarDataRelativa = (timestamp: string) => {
+    const agora = new Date();
+    const data = new Date(timestamp);
+    const diffMs = agora.getTime() - data.getTime();
+    const diffHoras = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDias = Math.floor(diffHoras / 24);
+
+    if (diffHoras < 1) return 'Agora há pouco';
+    if (diffHoras < 24) return `${diffHoras}h atrás`;
+    if (diffDias < 7) return `${diffDias}d atrás`;
+    return data.toLocaleDateString('pt-BR');
+  };
+
+  const getEventIcon = (event: string) => {
+    switch (event) {
+      case 'idea_generated': return <Sparkles className="w-4 h-4 text-purple-500" />;
+      case 'campaign_generated': return <Target className="w-4 h-4 text-blue-500" />;
+      case 'youtube_sync_completed': return <Activity className="w-4 h-4 text-red-500" />;
+      case 'tiktok_sync_completed': return <Activity className="w-4 h-4 text-black" />;
+      default: return <Clock className="w-4 h-4 text-gray-500" />;
+    }
+  };
+
+  const getEventText = (event: string, metadata?: any) => {
+    switch (event) {
+      case 'idea_generated': return 'Nova ideia gerada';
+      case 'campaign_generated': return `Campanha criada com ${metadata?.total_etapas || 0} etapas`;
+      case 'youtube_sync_completed': return `${metadata?.synced_count || 0} vídeos sincronizados do YouTube`;
+      case 'tiktok_sync_completed': return `${metadata?.synced_count || 0} vídeos sincronizados do TikTok`;
+      default: return 'Atividade registrada';
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="text-purple-600 font-semibold text-lg">Carregando dashboard...</div>
-      </div>
+      <Layout>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+        </div>
+      </Layout>
     );
   }
 
   return (
     <Layout>
-      <div className="space-y-6">
-        <header className="flex items-center space-x-4">
-          {avatarUrl && (
-            <img
-              src={avatarUrl}
-              alt="Avatar"
-              className="w-12 h-12 rounded-full border-2 border-purple-500 object-cover"
-            />
-          )}
+      <div className="space-y-8">
+        {/* Header com Boas-Vindas */}
+        <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-purple-700">Painel do Criador</h1>
-            <p className="text-sm text-gray-600">
-              Bem-vindo, <strong>{userName}</strong>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-white">
+              Olá, {userName}! 👋
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">
+              Bem-vindo ao seu painel de comando. Vamos criar conteúdo viral hoje?
             </p>
           </div>
-        </header>
+          <Link to="/ideia-viral">
+            <button className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-300 transform hover:scale-105 flex items-center gap-2 shadow-lg">
+              <Sparkles className="w-5 h-5" />
+              Gerar Nova Ideia
+            </button>
+          </Link>
+        </div>
 
-        <section>
-          <h2 className="text-lg font-semibold text-gray-800 mb-2">🚀 Próximas Ações</h2>
-          <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-            <li>Gerar ideias virais com inteligência artificial</li>
-            <li>Salvar e editar ideias favoritas</li>
-            <li>Monitorar engajamento e alcance</li>
-            <li>Compartilhar com sua comunidade</li>
-          </ul>
-        </section>
+        {/* KPIs Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Ideias Este Mês</h3>
+              <Brain className="w-6 h-6 text-purple-600" />
+            </div>
+            <p className="text-3xl font-bold text-gray-800 dark:text-white">{kpis.ideiasGeradasMes}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              {isActive ? 'Ilimitadas disponíveis' : '5 por dia no plano Free'}
+            </p>
+          </div>
 
-        <section className="bg-white border border-gray-200 p-4 rounded-lg shadow-sm">
-          <h3 className="text-md font-semibold text-gray-700 mb-2">💡 Ideia Gerada</h3>
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Campanhas Ativas</h3>
+              <Target className="w-6 h-6 text-blue-600" />
+            </div>
+            <p className="text-3xl font-bold text-gray-800 dark:text-white">{kpis.campanhasAtivas}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Estratégias coordenadas
+            </p>
+          </div>
 
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-md mb-4">
-              {error.message}
-              {error.details && (
-                <p className="text-sm mt-1 text-red-500">{error.details}</p>
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400">Score Médio Ganchos</h3>
+              <Zap className="w-6 h-6 text-yellow-600" />
+            </div>
+            <p className="text-3xl font-bold text-gray-800 dark:text-white">{kpis.scoreMedioGanchos}/100</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Potencial de retenção
+            </p>
+          </div>
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Insights da NEURA - Widget Principal */}
+          <div className="lg:col-span-2">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg">
+                  <TrendingUp className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
+                  Insights da NEURA
+                </h2>
+              </div>
+
+              {insights.length > 0 ? (
+                <div className="space-y-4">
+                  {insights.map((insight) => (
+                    <div
+                      key={insight.id}
+                      className="p-4 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <h3 className="font-medium text-gray-800 dark:text-white mb-2">
+                        {insight.title}
+                      </h3>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                        {insight.description}
+                      </p>
+                      <button
+                        onClick={() => handleInsightAction(insight)}
+                        className="text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 font-medium text-sm flex items-center gap-1 transition-colors"
+                      >
+                        {insight.action_text}
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Brain className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <p className="text-gray-500 dark:text-gray-400">
+                    Analisando tendências para gerar insights personalizados...
+                  </p>
+                </div>
               )}
             </div>
-          )}
+          </div>
 
-          {novaIdeia && (
-            <div className="bg-gray-50 border border-gray-300 p-4 rounded-md text-gray-800 mb-4">
-              <p className="whitespace-pre-line">{novaIdeia}</p>
-              <div className="flex justify-end gap-2 mt-3">
-                <button
-                  onClick={debouncedGerarIdeia}
-                  disabled={gerando || errorLoading}
-                  className={`bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium px-4 py-2 rounded transition ${
-                    gerando || errorLoading ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
-                >
-                  {gerando ? 'Gerando...' : 'Nova Ideia'}
-                </button>
-                <button
-                  onClick={copiarIdeia}
-                  className="border border-purple-600 text-purple-600 hover:bg-purple-50 text-sm font-medium px-4 py-2 rounded"
-                >
-                  Copiar Ideia
-                </button>
+          {/* Sidebar com Campanhas e Atividade */}
+          <div className="space-y-6">
+            {/* Campanhas em Andamento */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
+                  Campanhas Ativas
+                </h3>
+                <Link to="/campanhas" className="text-purple-600 hover:text-purple-800 text-sm">
+                  Ver todas
+                </Link>
               </div>
+
+              {campanhasAtivas.length > 0 ? (
+                <div className="space-y-3">
+                  {campanhasAtivas.map((campanha) => (
+                    <div key={campanha.id} className="p-3 border border-gray-200 dark:border-gray-600 rounded-lg">
+                      <h4 className="font-medium text-gray-800 dark:text-white text-sm mb-2">
+                        {campanha.objetivo_principal}
+                      </h4>
+                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-2">
+                        <span>{campanha.etapas_publicadas}/{campanha.total_etapas} etapas</span>
+                        <span className={`px-2 py-1 rounded-full ${
+                          campanha.campanha_status === 'ativa' 
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                            : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>
+                          {campanha.campanha_status}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                        <div
+                          className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                          style={{
+                            width: `${(campanha.etapas_publicadas / campanha.total_etapas) * 100}%`
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <Target className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+                    Nenhuma campanha ativa
+                  </p>
+                  <Link to="/campanhas">
+                    <button className="text-purple-600 hover:text-purple-800 text-sm font-medium">
+                      Criar primeira campanha
+                    </button>
+                  </Link>
+                </div>
+              )}
             </div>
-          )}
 
-          {!novaIdeia && !gerando && (
-            <button
-              onClick={debouncedGerarIdeia}
-              disabled={gerando || errorLoading}
-              className={`bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium px-5 py-2 rounded transition ${
-                gerando || errorLoading ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-            >
-              Gerar nova ideia
-            </button>
-          )}
+            {/* Atividade Recente */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                Atividade Recente
+              </h3>
 
-          {gerando && (
-            <div className="flex items-center gap-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-600"></div>
-              <p className="text-sm text-gray-500">Gerando ideia com inteligência artificial...</p>
+              {atividadeRecente.length > 0 ? (
+                <div className="space-y-3">
+                  {atividadeRecente.map((atividade) => (
+                    <div key={atividade.id} className="flex items-start gap-3">
+                      <div className="mt-1">
+                        {getEventIcon(atividade.event)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-800 dark:text-white">
+                          {getEventText(atividade.event, atividade.metadata)}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {formatarDataRelativa(atividade.timestamp)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <Activity className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Nenhuma atividade recente
+                  </p>
+                </div>
+              )}
             </div>
-          )}
-        </section>
+          </div>
+        </div>
 
-        <footer className="pt-4 border-t text-sm text-gray-400 text-center">
-          Projeto NEURA • Dashboard v1.0
-        </footer>
+        {/* Call to Action para Upgrade */}
+        {!isActive && (
+          <div className="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 border border-purple-200 dark:border-purple-800 rounded-xl p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-2">
+                  🚀 Desbloqueie Todo o Potencial do NEURA
+                </h3>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Ideias ilimitadas, analytics avançado e insights preditivos com o plano Pro.
+                </p>
+              </div>
+              <Link to="/pricing">
+                <button className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors">
+                  Fazer Upgrade
+                </button>
+              </Link>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );
