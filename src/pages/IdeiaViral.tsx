@@ -418,7 +418,7 @@ export default function IdeiaViral() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0"></span>
-                  Use "Me Surpreenda" para descobrir tendências emergentes
+                  Use "Me Surpreenda\" para descobrir tendências emergentes
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="w-1.5 h-1.5 bg-purple-500 rounded-full mt-2 flex-shrink-0"></span>
