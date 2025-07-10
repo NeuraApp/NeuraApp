@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
 import { useSubscription } from '../hooks/useSubscription';
 import { useToast } from '../hooks/useToast';
