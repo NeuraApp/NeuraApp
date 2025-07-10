@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
 import { useSubscription } from '../hooks/useSubscription';
 import { useToast } from '../hooks/useToast';
@@ -73,6 +74,7 @@ export default function IdeiaViral() {
   const [formatoSelecionado, setFormatoSelecionado] = useState<string>('');
   const [ideiasGeradas, setIdeiasGeradas] = useState<IdeiaGerada[]>([]);
   const [historicoSessao, setHistoricoSessao] = useState<IdeiaGerada[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string>('');
 
   useEffect(() => {
     carregarUsuario();
@@ -110,12 +112,80 @@ export default function IdeiaViral() {
     }
   };
 
-  const handleOtimizarEGerar = () => {
-    console.log('Otimizar e Gerar Ideias clicked');
-    console.log('Tema:', temaUsuario);
-    console.log('Plataforma:', plataformaSelecionada);
-    console.log('Formato:', formatoSelecionado);
-    // Lógica será implementada na próxima etapa
+  const handleOtimizarEGerar = async () => {
+    // Validação básica
+    if (!temaUsuario.trim()) {
+      error('Por favor, descreva sobre o que você quer criar');
+      return;
+    }
+
+    setGenerating(true);
+    setErrorMessage('');
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('Sessão não encontrada');
+      }
+
+      // Preparar dados para envio
+      const requestBody = {
+        context: 'user_optimization',
+        user_input: temaUsuario.trim(),
+        plataforma_preferida: plataformaSelecionada || null,
+        formato_preferido: formatoSelecionado || null,
+        include_hooks: true // Sempre incluir ganchos para otimização
+      };
+
+      console.log('🎯 Gerando ideia otimizada:', {
+        tema: temaUsuario,
+        plataforma: plataformaSelecionada,
+        formato: formatoSelecionado
+      });
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gerar-ideia`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Erro ${response.status} ao gerar ideia`);
+      }
+
+      const ideiaGerada = await response.json();
+      
+      // Validar resposta
+      if (!ideiaGerada.conteudo) {
+        throw new Error('Resposta inválida da IA');
+      }
+
+      // Adicionar timestamp para o histórico
+      const ideiaComTimestamp = {
+        ...ideiaGerada,
+        created_at: new Date().toISOString()
+      };
+
+      // Atualizar estados
+      setIdeiasGeradas(prev => [ideiaComTimestamp, ...prev]);
+      setHistoricoSessao(prev => [ideiaComTimestamp, ...prev.slice(0, 4)]); // Manter apenas 5 no histórico
+      
+      success('Ideia otimizada gerada com sucesso!');
+      
+      console.log('✅ Ideia gerada:', ideiaGerada);
+      
+    } catch (err) {
+      console.error('Erro ao gerar ideia:', err);
+      const errorMsg = err instanceof Error ? err.message : 'Erro ao gerar ideia';
+      setErrorMessage(errorMsg);
+      error(errorMsg);
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handleMeSurpreenda = () => {
@@ -221,6 +291,13 @@ export default function IdeiaViral() {
                   ✨ Me Surpreenda (Buscar Tendência Viral)
                 </button>
               </div>
+
+              {/* Mensagem de Erro */}
+              {errorMessage && (
+                <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p className="text-red-600 dark:text-red-400 text-sm">{errorMessage}</p>
+                </div>
+              )}
             </div>
 
             {/* Seção de Filtros */}
