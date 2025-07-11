@@ -4,8 +4,7 @@ import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
 import { LoadingButton } from '../components/LoadingButton';
 import { useToast } from '../hooks/useToast';
-import AvatarUploader from '../components/AvatarUploader';
-import { Youtube, Music, Instagram, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Youtube, Music, Instagram, CheckCircle } from 'lucide-react';
 
 // --- INTERFACES E CONFIGURAÇÕES ---
 interface SocialConnection {
@@ -13,8 +12,6 @@ interface SocialConnection {
   platform: string;
   platform_user_id: string;
   platform_username: string; // Nome do canal/usuário
-  last_sync_at: string;
-  is_expired: boolean;
 }
 
 const PLATFORM_CONFIG = {
@@ -43,40 +40,36 @@ export default function MinhaConta() {
     }
   }, [showError]);
 
-  // useEffect para carregar dados iniciais
+  // useEffect UNIFICADO para lidar com toda a lógica de inicialização da página
   useEffect(() => {
-    const loadInitialData = async () => {
+    const initializePage = async () => {
       setLoading(true);
+
+      // 1. Verifica se o usuário está logado
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         navigate('/login');
         return;
       }
-      await loadConnections();
-      setLoading(false);
-    }
-    loadInitialData();
-  }, [loadConnections, navigate]);
 
-  // useEffect DEDICADO para lidar com o callback do OAuth
-  useEffect(() => {
-    const handleOAuthRedirect = async () => {
-      if (window.location.hash) {
+      // 2. Verifica se a página foi carregada a partir de um redirecionamento OAuth
+      if (window.location.hash.includes('provider_token')) {
         const params = new URLSearchParams(window.location.hash.substring(1));
         const accessToken = params.get('provider_token');
         const platform = params.get('platform');
         
-        // Limpa a URL imediatamente
+        // Limpa a URL imediatamente para uma melhor UX
         navigate('/minha-conta', { replace: true });
 
         if (accessToken && platform) {
           showError('Finalizando conexão, por favor aguarde...');
           try {
+            // 3. Salva os novos tokens no banco de dados
             const { error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
               body: {
                 platform,
                 accessToken,
-                // Outros tokens podem ser passados aqui se necessário
+                // Outros tokens como refresh_token podem ser passados aqui
               }
             });
 
@@ -84,7 +77,7 @@ export default function MinhaConta() {
 
             success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} conectado com sucesso!`);
             
-            // PONTO CRÍTICO: Recarrega as conexões para atualizar a UI
+            // 4. PONTO CRÍTICO: Após salvar, recarrega a lista de conexões
             await loadConnections();
 
           } catch (err) {
@@ -92,17 +85,23 @@ export default function MinhaConta() {
             showError("Falha ao salvar a conexão com a conta.");
           }
         }
+      } else {
+        // 5. Se não for um redirecionamento, apenas carrega as conexões existentes
+        await loadConnections();
       }
+
+      setLoading(false);
     };
-    handleOAuthRedirect();
-  }, [navigate, success, showError, loadConnections]);
+
+    initializePage();
+  }, [loadConnections, navigate, showError, success]);
 
 
   const handleConnectPlatform = async (platform: string) => {
     setConnectingPlatform(platform);
     try {
       const { data, error } = await supabase.functions.invoke('start-oauth-flow', {
-        body: { platform, state: platform } // Passando a plataforma no 'state'
+        body: { platform, state: platform } // Passando a plataforma no 'state' para o callback
       });
       if (error) throw error;
       if(data.auth_url) {
