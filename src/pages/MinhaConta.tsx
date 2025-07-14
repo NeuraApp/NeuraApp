@@ -28,7 +28,7 @@ export default function MinhaConta() {
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [connections, setConnections] = useState<SocialConnection[]>([]);
 
-  // Função para carregar as conexões, agora com useCallback para otimização
+  // Função para carregar as conexões
   const loadConnections = useCallback(async () => {
     try {
       const { data, error } = await supabase.rpc('get_active_connections');
@@ -45,18 +45,19 @@ export default function MinhaConta() {
     const initializePage = async () => {
       setLoading(true);
 
-      // 1. Verifica se o usuário está logado
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         navigate('/login');
         return;
       }
 
-      // 2. Verifica se a página foi carregada a partir de um redirecionamento OAuth
+      // Lógica para lidar com o redirecionamento OAuth
       if (window.location.hash.includes('provider_token')) {
         const params = new URLSearchParams(window.location.hash.substring(1));
         const accessToken = params.get('provider_token');
         const platform = params.get('platform');
+        const refreshToken = params.get('provider_refresh_token');
+        const expiresIn = params.get('expires_in');
         
         // Limpa a URL imediatamente para uma melhor UX
         navigate('/minha-conta', { replace: true });
@@ -64,29 +65,30 @@ export default function MinhaConta() {
         if (accessToken && platform) {
           showError('Finalizando conexão, por favor aguarde...');
           try {
-            // 3. Salva os novos tokens no banco de dados
-            const { error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
-              body: {
-                platform,
-                accessToken,
-                // Outros tokens como refresh_token podem ser passados aqui
-              }
+            // PONTO CRÍTICO: Agora invocamos a função e esperamos os dados de volta
+            const { data: result, error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
+              body: { platform, accessToken, refreshToken, expiresIn: expiresIn ? parseInt(expiresIn) : null }
             });
 
             if (saveError) throw saveError;
 
+            // ATUALIZAÇÃO DIRETA: Adicionamos a nova conexão ao estado local
+            setConnections(prevConnections => {
+              // Remove qualquer conexão antiga da mesma plataforma para evitar duplicatas
+              const otherConnections = prevConnections.filter(c => c.platform !== platform);
+              // Adiciona a nova conexão retornada pela função
+              return [...otherConnections, result.connection];
+            });
+
             success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} conectado com sucesso!`);
             
-            // 4. PONTO CRÍTICO: Após salvar, recarrega a lista de conexões
-            await loadConnections();
-
           } catch (err) {
             console.error("Error saving OAuth tokens:", err);
             showError("Falha ao salvar a conexão com a conta.");
           }
         }
       } else {
-        // 5. Se não for um redirecionamento, apenas carrega as conexões existentes
+        // Se não for um redirecionamento, apenas carrega as conexões existentes
         await loadConnections();
       }
 
@@ -130,7 +132,8 @@ export default function MinhaConta() {
       if (error) throw error;
 
       success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} desconectado com sucesso.`);
-      await loadConnections(); // Recarrega para atualizar a UI
+      // ATUALIZAÇÃO DIRETA: Remove a conexão do estado local para uma UI instantânea
+      setConnections(prev => prev.filter(c => c.platform !== platform));
     } catch (err) {
       console.error('Erro ao desconectar:', err);
       showError('Erro ao desconectar conta.');
