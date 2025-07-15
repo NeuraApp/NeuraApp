@@ -3,20 +3,20 @@
 @tailwind utilities;
 
 :root {
-  /* CORREÇÃO: Os valores HSL foram envolvidos pela função hsl() */
-  --background: hsl(0 0% 100%);
-  --foreground: hsl(222.2 84% 4.9%);
+  /* CORREÇÃO FINAL: Usando vírgulas para separar os valores HSL */
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(222.2, 84%, 4.9%);
 }
 
 .dark {
-  /* CORREÇÃO: Os valores HSL foram envolvidos pela função hsl() */
-  --background: hsl(222.2 84% 4.9%);
-  --foreground: hsl(0 0% 100%);
+  /* CORREÇÃO FINAL: Usando vírgulas para separar os valores HSL */
+  --background: hsl(222.2, 84%, 4.9%);
+  --foreground: hsl(0, 0%, 100%);
 }
 
 body {
   @apply bg-[hsl(var(--background))] text-[hsl(var(--foreground))];
-  /* A linha 'cursor: none;' foi removida daqui para corrigir o problema do mouse desaparecido. */
+  /* A linha 'cursor: none;' foi removida para corrigir o problema do mouse. */
 }
 
 /* Custom animations */
