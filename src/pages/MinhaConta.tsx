@@ -6,7 +6,7 @@ import { LoadingButton } from '../components/LoadingButton';
 import { useToast } from '../hooks/useToast';
 import { Youtube, Music, Instagram, CheckCircle } from 'lucide-react';
 
-// --- INTERFACES E CONFIGURAÇÕES (Sem alterações) ---
+// --- INTERFACES E CONFIGURAÇÕES ---
 interface SocialConnection {
   id: string;
   platform: string;
@@ -28,38 +28,51 @@ export default function MinhaConta() {
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [connections, setConnections] = useState<SocialConnection[]>([]);
 
+  // Função para carregar as conexões
+  const loadConnections = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc('get_active_connections');
+      if (error) throw error;
+      setConnections(data || []);
+    } catch (err) {
+      console.error('Erro ao carregar conexões:', err);
+      showError('Não foi possível carregar suas conexões.');
+    }
+  }, [showError]);
+
   // useEffect UNIFICADO para lidar com toda a lógica de inicialização da página
   useEffect(() => {
     const initializePage = async () => {
       setLoading(true);
 
-      // 1. Garante que o usuário está logado
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         navigate('/login', { replace: true });
         return;
       }
 
-      // 2. Lógica para lidar com o redirecionamento OAuth
+      // Lógica para lidar com o redirecionamento OAuth
       if (window.location.hash.includes('provider_token')) {
         const params = new URLSearchParams(window.location.hash.substring(1));
         const accessToken = params.get('provider_token');
         const platform = params.get('platform');
-        const refreshToken = params.get('provider_refresh_token');
-        const expiresIn = params.get('expires_in');
         
-        // Limpa a URL imediatamente para uma melhor UX e para evitar re-execução
         navigate('/minha-conta', { replace: true });
 
         if (accessToken && platform) {
           showError('Finalizando conexão, por favor aguarde...');
           try {
-            // 3. Invoca a função para salvar os tokens no banco de dados
-            const { error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
-              body: { platform, accessToken, refreshToken, expiresIn: expiresIn ? parseInt(expiresIn) : null }
+            const { data: result, error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
+              body: { platform, accessToken }
             });
 
             if (saveError) throw saveError;
+
+            // ATUALIZAÇÃO DIRETA E FORÇADA DO ESTADO
+            setConnections(prevConnections => {
+              const otherConnections = prevConnections.filter(c => c.platform !== platform);
+              return [...otherConnections, result.connection];
+            });
 
             success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} conectado com sucesso!`);
             
@@ -68,33 +81,22 @@ export default function MinhaConta() {
             showError("Falha ao salvar a conexão com a conta.");
           }
         }
-      }
-
-      // 4. PONTO CRÍTICO: Após processar (ou não) o hash, carrega o estado final do banco.
-      // Esta chamada agora buscará os dados mais recentes, incluindo a nova conexão.
-      try {
-        const { data, error } = await supabase.rpc('get_active_connections');
-        if (error) throw error;
-        setConnections(data || []);
-      } catch (err) {
-        console.error('Erro ao carregar conexões:', err);
-        showError('Não foi possível carregar suas conexões.');
+      } else {
+        await loadConnections();
       }
 
       setLoading(false);
     };
 
     initializePage();
-  // A array de dependências vazia garante que esta lógica de inicialização
-  // execute apenas uma vez quando o componente é montado.
-  }, [navigate, showError, success]);
+  }, [loadConnections, navigate, showError, success]);
 
 
   const handleConnectPlatform = async (platform: string) => {
     setConnectingPlatform(platform);
     try {
       const { data, error } = await supabase.functions.invoke('start-oauth-flow', {
-        body: { platform, state: platform } // Passando a plataforma no 'state' para o callback
+        body: { platform, state: platform }
       });
       if (error) throw error;
       if(data.auth_url) {
@@ -123,7 +125,6 @@ export default function MinhaConta() {
       if (error) throw error;
 
       success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} desconectado com sucesso.`);
-      // ATUALIZAÇÃO DIRETA: Remove a conexão do estado local para uma UI instantânea
       setConnections(prev => prev.filter(c => c.platform !== platform));
     } catch (err) {
       console.error('Erro ao desconectar:', err);
