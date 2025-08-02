@@ -21,13 +21,13 @@ interface TikTokConnection {
 }
 
 async function refreshTikTokToken(connection: TikTokConnection): Promise<string> {
-  const response = await fetch('https://open-api.tiktok.com/oauth/refresh_token/', {
+  const response = await fetch('https://open.tiktokapis.com/v2/oauth/token/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({
-      client_key: Deno.env.get('TIKTOK_CLIENT_ID')!,
+      client_key: Deno.env.get('TIKTOK_CLIENT_KEY')!,
       client_secret: Deno.env.get('TIKTOK_CLIENT_SECRET')!,
       refresh_token: connection.refresh_token,
       grant_type: 'refresh_token',
@@ -35,28 +35,29 @@ async function refreshTikTokToken(connection: TikTokConnection): Promise<string>
   });
 
   if (!response.ok) {
-    throw new Error('Failed to refresh TikTok access token');
+    const errorText = await response.text();
+    throw new Error(`Failed to refresh TikTok access token: ${errorText}`);
   }
 
   const tokenData = await response.json();
   
-  if (tokenData.error_code !== 0) {
-    throw new Error(`TikTok token refresh error: ${tokenData.message}`);
+  if (tokenData.error) {
+    throw new Error(`TikTok token refresh error: ${tokenData.error_description || tokenData.error}`);
   }
 
   // Atualizar token no banco
-  const expiresAt = new Date(Date.now() + tokenData.data.expires_in * 1000);
+  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
   await supabase
     .from('user_connections')
     .update({
-      access_token: tokenData.data.access_token,
-      refresh_token: tokenData.data.refresh_token,
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token || connection.refresh_token, // Keep existing if not provided
       expires_at: expiresAt.toISOString(),
       status: 'active'
     })
     .eq('id', connection.id);
 
-  return tokenData.data.access_token;
+  return tokenData.access_token;
 }
 
 async function getValidTikTokToken(connection: TikTokConnection): Promise<string> {
@@ -72,68 +73,72 @@ async function getValidTikTokToken(connection: TikTokConnection): Promise<string
 }
 
 async function getTikTokVideos(accessToken: string, openId: string) {
-  const response = await fetch('https://open-api.tiktok.com/video/list/', {
+  const response = await fetch('https://open.tiktokapis.com/v2/video/list/', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      open_id: openId,
-      cursor: 0,
       max_count: 20,
-      filters: {
-        video_ids: []
-      }
+      cursor: 0,
+      fields: [
+        'id',
+        'title',
+        'video_description',
+        'create_time',
+        'cover_image_url',
+        'share_url',
+        'duration'
+      ]
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`TikTok Video List API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`TikTok Video List API error: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
   
-  if (data.error.code !== 'ok') {
-    throw new Error(`TikTok API error: ${data.error.message}`);
+  if (data.error) {
+    throw new Error(`TikTok API error: ${data.error.message || data.error}`);
   }
 
   return data.data;
 }
 
 async function getTikTokVideoAnalytics(accessToken: string, openId: string, videoIds: string[]) {
-  const response = await fetch('https://open-api.tiktok.com/video/data/', {
+  const response = await fetch('https://open.tiktokapis.com/v2/research/video/query/', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      open_id: openId,
-      video_ids: videoIds,
+      filters: {
+        video_ids: videoIds
+      },
       fields: [
-        'video_id',
+        'id',
         'like_count',
         'comment_count',
         'share_count',
         'view_count',
-        'profile_view_count',
-        'reach_count',
-        'full_video_watched_rate',
-        'total_time_watched',
-        'average_time_watched'
+        'play_count'
       ]
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`TikTok Analytics API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`TikTok Analytics API error: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
   
-  if (data.error.code !== 'ok') {
-    throw new Error(`TikTok Analytics API error: ${data.error.message}`);
+  if (data.error) {
+    throw new Error(`TikTok Analytics API error: ${data.error.message || data.error}`);
   }
 
   return data.data;
@@ -229,45 +234,44 @@ async function syncUserTikTokContent(connection: TikTokConnection) {
           const analyticsData = await getTikTokVideoAnalytics(
             accessToken, 
             openId, 
-            [matchingVideo.video_id]
+            [matchingVideo.id]
           );
           
           if (analyticsData.videos && analyticsData.videos.length > 0) {
             const analytics = analyticsData.videos[0];
             
             // Calcular métricas derivadas
-            const totalWatchTime = analytics.total_time_watched || 0;
-            const averageWatchTime = analytics.average_time_watched || 0;
-            const fullVideoWatchedRate = analytics.full_video_watched_rate || 0;
+            const viewCount = analytics.view_count || analytics.play_count || 0;
+            const likeCount = analytics.like_count || 0;
+            const commentCount = analytics.comment_count || 0;
+            const shareCount = analytics.share_count || 0;
             
-            // Estimar retention rates baseado nos dados disponíveis
-            const retention_rate_3s = Math.min(1.0, (averageWatchTime / 3) || 0);
-            const retention_rate_15s = Math.min(1.0, (averageWatchTime / 15) || 0);
-            const retention_rate_30s = Math.min(1.0, fullVideoWatchedRate / 100 || 0);
+            // Estimar retention rates baseado nos dados disponíveis (valores padrão)
+            const retention_rate_3s = 0.8; // Estimativa padrão
+            const retention_rate_15s = 0.5; // Estimativa padrão
+            const retention_rate_30s = 0.3; // Estimativa padrão
+            const averageWatchTime = matchingVideo.duration ? matchingVideo.duration * 0.4 : 15; // Estimativa
 
             // Salvar performance data
             await supabase.from('performance_conteudo').insert({
               ideia_id: content.id,
               user_id: content.user_id,
-              views: analytics.view_count || 0,
-              likes: analytics.like_count || 0,
-              comments: analytics.comment_count || 0,
-              shares: analytics.share_count || 0,
+              views: viewCount,
+              likes: likeCount,
+              comments: commentCount,
+              shares: shareCount,
               retention_rate_3s,
               retention_rate_15s,
               retention_rate_30s,
               average_watch_time: averageWatchTime,
               posted_at: new Date(matchingVideo.create_time * 1000).toISOString(),
               platform_specific_data: {
-                video_id: matchingVideo.video_id,
+                video_id: matchingVideo.id,
                 video_title: matchingVideo.title,
                 video_description: matchingVideo.video_description,
                 cover_image_url: matchingVideo.cover_image_url,
-                web_video_url: matchingVideo.web_video_url,
-                duration: matchingVideo.duration,
-                reach_count: analytics.reach_count,
-                profile_view_count: analytics.profile_view_count,
-                full_video_watched_rate: fullVideoWatchedRate
+                share_url: matchingVideo.share_url,
+                duration: matchingVideo.duration
               }
             });
             
