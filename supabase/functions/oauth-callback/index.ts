@@ -18,10 +18,10 @@ const TOKEN_CONFIG = {
     user_info_url: 'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true'
   },
   tiktok: {
-    client_id: Deno.env.get('TIKTOK_CLIENT_ID')!,
+    client_id: Deno.env.get('TIKTOK_CLIENT_KEY')!,
     client_secret: Deno.env.get('TIKTOK_CLIENT_SECRET')!,
-    token_url: 'https://open-api.tiktok.com/oauth/access_token/',
-    user_info_url: 'https://open-api.tiktok.com/user/info/'
+    token_url: 'https://open.tiktokapis.com/v2/oauth/token/',
+    user_info_url: 'https://open.tiktokapis.com/v2/user/info/'
   }
 };
 
@@ -43,23 +43,50 @@ async function exchangeCodeForTokens(platform: string, code: string, redirectUri
     throw new Error(`Platform ${platform} not supported`);
   }
 
-  const tokenResponse = await fetch(config.token_url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: config.client_id,
-      client_secret: config.client_secret,
-      code,
-      grant_type: 'authorization_code',
-      redirect_uri: redirectUri,
-    }),
-  });
+  let tokenResponse: Response;
+  
+  // Platform-specific token exchange
+  switch (platform) {
+    case 'youtube':
+      tokenResponse = await fetch(config.token_url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          client_id: config.client_id,
+          client_secret: config.client_secret,
+          code,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+        }),
+      });
+      break;
+      
+    case 'tiktok':
+      tokenResponse = await fetch(config.token_url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cache-Control': 'no-cache',
+        },
+        body: new URLSearchParams({
+          client_key: config.client_id, // TikTok uses 'client_key'
+          client_secret: config.client_secret,
+          code,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+        }),
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
 
   if (!tokenResponse.ok) {
     const errorText = await tokenResponse.text();
-    throw new Error(`Token exchange failed: ${errorText}`);
+    throw new Error(`Token exchange failed for ${platform}: ${errorText}`);
   }
 
   return await tokenResponse.json();
@@ -68,14 +95,38 @@ async function exchangeCodeForTokens(platform: string, code: string, redirectUri
 async function getUserInfo(platform: string, accessToken: string) {
   const config = TOKEN_CONFIG[platform as keyof typeof TOKEN_CONFIG];
   
-  const userResponse = await fetch(config.user_info_url, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-    },
-  });
+  let userResponse: Response;
+  
+  // Platform-specific user info requests
+  switch (platform) {
+    case 'youtube':
+      userResponse = await fetch(config.user_info_url, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      break;
+      
+    case 'tiktok':
+      userResponse = await fetch(config.user_info_url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fields: ['open_id', 'union_id', 'avatar_url', 'display_name', 'username']
+        }),
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
 
   if (!userResponse.ok) {
-    throw new Error('Failed to fetch user info');
+    const errorText = await userResponse.text();
+    throw new Error(`Failed to fetch ${platform} user info: ${errorText}`);
   }
 
   const userData = await userResponse.json();
@@ -96,20 +147,23 @@ async function getUserInfo(platform: string, accessToken: string) {
       }
     };
   } else if (platform === 'tiktok') {
+    const user = userData.data?.user;
     return {
-      platform_user_id: userData.data?.user?.open_id,
-      platform_username: userData.data?.user?.display_name,
+      platform_user_id: user?.open_id || user?.union_id,
+      platform_username: user?.display_name || user?.username,
       platform_data: {
-        open_id: userData.data?.user?.open_id,
-        display_name: userData.data?.user?.display_name,
-        avatar_url: userData.data?.user?.avatar_url,
-        follower_count: userData.data?.user?.follower_count,
-        following_count: userData.data?.user?.following_count
+        open_id: user?.open_id,
+        union_id: user?.union_id,
+        display_name: user?.display_name,
+        username: user?.username,
+        avatar_url: user?.avatar_url,
+        follower_count: user?.follower_count,
+        following_count: user?.following_count
       }
     };
   }
   
-  throw new Error('Unknown platform');
+  throw new Error(`Unknown platform: ${platform}`);
 }
 
 Deno.serve(async (req) => {
@@ -126,10 +180,12 @@ Deno.serve(async (req) => {
     // Verificar se houve erro na autorização
     if (error) {
       const errorDescription = url.searchParams.get('error_description') || 'Authorization failed';
+      console.error(`OAuth authorization error for ${state}:`, error, errorDescription);
+      
       return new Response(null, {
         status: 302,
         headers: {
-          'Location': `${Deno.env.get('FRONTEND_URL')}/minha-conta?error=oauth_denied&message=${encodeURIComponent(errorDescription)}`
+          'Location': `${Deno.env.get('FRONTEND_URL') || 'http://localhost:5173'}/minha-conta?error=oauth_denied&message=${encodeURIComponent(errorDescription)}`
         }
       });
     }
@@ -140,6 +196,8 @@ Deno.serve(async (req) => {
 
     // Validar e parsear state
     const { userId, platform, timestamp } = parseState(state);
+    
+    console.log(`Processing OAuth callback for platform: ${platform}, user: ${userId}`);
     
     // Verificar se state não expirou (10 minutos)
     const now = Date.now();
@@ -164,6 +222,7 @@ Deno.serve(async (req) => {
     const redirectUri = `${supabaseUrl}/functions/v1/oauth-callback`;
 
     // Trocar code por tokens
+    console.log(`Exchanging code for tokens - Platform: ${platform}`);
     const tokenData = await exchangeCodeForTokens(platform, code, redirectUri);
     
     if (!tokenData.access_token) {
@@ -171,6 +230,7 @@ Deno.serve(async (req) => {
     }
 
     // Obter informações do usuário da plataforma
+    console.log(`Fetching user info for platform: ${platform}`);
     const userInfo = await getUserInfo(platform, tokenData.access_token);
 
     // Calcular data de expiração
@@ -178,7 +238,8 @@ Deno.serve(async (req) => {
       ? new Date(Date.now() + tokenData.expires_in * 1000)
       : null;
 
-    // Salvar conexão no banco (criptografar tokens em produção)
+    // Salvar conexão no banco com upsert para garantir atualização
+    console.log(`Saving connection to database for user: ${userId}, platform: ${platform}`);
     const { error: saveError } = await supabase
       .from('user_connections')
       .upsert({
@@ -192,14 +253,18 @@ Deno.serve(async (req) => {
         scopes: tokenData.scope?.split(' ') || [],
         status: 'active',
         platform_data: userInfo.platform_data,
-        last_sync_at: new Date().toISOString()
+        last_sync_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       }, {
         onConflict: 'user_id,platform'
       });
 
     if (saveError) {
+      console.error('Database save error:', saveError);
       throw new Error(`Failed to save connection: ${saveError.message}`);
     }
+
+    console.log(`Successfully saved ${platform} connection for user ${userId}`);
 
     // Log sucesso
     await supabase.from('logs').insert({
@@ -210,16 +275,18 @@ Deno.serve(async (req) => {
         platform,
         platform_user_id: userInfo.platform_user_id,
         platform_username: userInfo.platform_username,
-        scopes: tokenData.scope?.split(' ') || []
+        scopes: tokenData.scope?.split(' ') || [],
+        token_expires_at: expiresAt?.toISOString()
       },
       timestamp: new Date().toISOString()
     });
 
     // Redirecionar para frontend com sucesso
+    const frontendUrl = Deno.env.get('FRONTEND_URL') || 'http://localhost:5173';
     return new Response(null, {
       status: 302,
       headers: {
-        'Location': `${Deno.env.get('FRONTEND_URL')}/minha-conta?success=connection_created&platform=${platform}&username=${encodeURIComponent(userInfo.platform_username || '')}`
+        'Location': `${frontendUrl}/minha-conta?success=connection_created&platform=${platform}&username=${encodeURIComponent(userInfo.platform_username || '')}`
       }
     });
 
@@ -237,6 +304,10 @@ Deno.serve(async (req) => {
           user_id: userId,
           success: false,
           error: error.message,
+          metadata: {
+            platform: state.includes(':') ? parseState(state).platform : 'unknown',
+            error_type: error.name || 'UnknownError'
+          },
           timestamp: new Date().toISOString()
         });
       }
@@ -245,10 +316,11 @@ Deno.serve(async (req) => {
     }
 
     // Redirecionar para frontend com erro
+    const frontendUrl = Deno.env.get('FRONTEND_URL') || 'http://localhost:5173';
     return new Response(null, {
       status: 302,
       headers: {
-        'Location': `${Deno.env.get('FRONTEND_URL')}/minha-conta?error=connection_failed&message=${encodeURIComponent(error.message)}`
+        'Location': `${frontendUrl}/minha-conta?error=connection_failed&message=${encodeURIComponent(error.message)}`
       }
     });
   }

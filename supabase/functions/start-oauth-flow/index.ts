@@ -20,12 +20,14 @@ const OAUTH_CONFIG = {
     ]
   },
   tiktok: {
-    client_id: Deno.env.get('TIKTOK_CLIENT_ID')!,
-    auth_url: 'https://www.tiktok.com/auth/authorize/',
+    client_id: Deno.env.get('TIKTOK_CLIENT_KEY')!,
+    auth_url: 'https://www.tiktok.com/v2/auth/authorize/',
     scopes: [
       'user.info.basic',
       'video.list',
-      'video.insights'
+      'video.insights',
+      'user.info.profile',
+      'user.info.stats'
     ]
   }
 };
@@ -45,15 +47,35 @@ function buildAuthUrl(platform: string, state: string, redirectUri: string): str
     throw new Error(`Platform ${platform} not supported`);
   }
 
-  const params = new URLSearchParams({
-    client_id: config.client_id,
-    redirect_uri: redirectUri,
-    scope: config.scopes.join(' '),
-    response_type: 'code',
-    state: state,
-    access_type: 'offline', // Para obter refresh token
-    prompt: 'consent' // Forçar consentimento para refresh token
-  });
+  // Platform-specific URL construction
+  let params: URLSearchParams;
+  
+  switch (platform) {
+    case 'youtube':
+      params = new URLSearchParams({
+        client_id: config.client_id,
+        redirect_uri: redirectUri,
+        scope: config.scopes.join(' '),
+        response_type: 'code',
+        state: state,
+        access_type: 'offline', // Para obter refresh token
+        prompt: 'consent' // Forçar consentimento para refresh token
+      });
+      break;
+      
+    case 'tiktok':
+      params = new URLSearchParams({
+        client_key: config.client_id, // TikTok uses 'client_key' instead of 'client_id'
+        redirect_uri: redirectUri,
+        scope: config.scopes.join(','), // TikTok uses comma-separated scopes
+        response_type: 'code',
+        state: state
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
 
   return `${config.auth_url}?${params.toString()}`;
 }

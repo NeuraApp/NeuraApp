@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import Layout from '../components/Layout';
 import { LoadingButton } from '../components/LoadingButton';
 import { useToast } from '../hooks/useToast';
-import { Youtube, Music, Instagram, CheckCircle } from 'lucide-react';
+import { Youtube, Music, Instagram, CheckCircle, Loader2 } from 'lucide-react';
 
 // --- INTERFACES E CONFIGURAÇÕES ---
 interface SocialConnection {
@@ -25,6 +25,7 @@ export default function MinhaConta() {
   const navigate = useNavigate();
   const { success, error: showError } = useToast();
   const [loading, setLoading] = useState(true);
+  const [processingOAuth, setProcessingOAuth] = useState(false);
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [connections, setConnections] = useState<SocialConnection[]>([]);
 
@@ -40,10 +41,11 @@ export default function MinhaConta() {
     }
   }, [showError]);
 
-  // useEffect UNIFICADO para lidar com toda a lógica de inicialização da página
+  // FIXED: Strict execution order for OAuth flow and UI synchronization
   useEffect(() => {
     const initializePage = async () => {
       setLoading(true);
+      setProcessingOAuth(false);
 
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -51,37 +53,39 @@ export default function MinhaConta() {
         return;
       }
 
-      // Lógica para lidar com o redirecionamento OAuth
+      // STEP 1: Check for OAuth tokens in URL hash
       if (window.location.hash.includes('provider_token')) {
+        setProcessingOAuth(true);
         const params = new URLSearchParams(window.location.hash.substring(1));
         const accessToken = params.get('provider_token');
         const platform = params.get('platform');
         
+        // Clean URL immediately to prevent re-processing
         navigate('/minha-conta', { replace: true });
 
         if (accessToken && platform) {
-          showError('Finalizando conexão, por favor aguarde...');
           try {
-            const { data: result, error: saveError } = await supabase.functions.invoke('save-oauth-tokens', {
+            // STEP 2: Save OAuth tokens and WAIT for completion
+            const { data: result, error: saveError } = await supabase.functions.invoke('oauth-callback', {
               body: { platform, accessToken }
             });
 
             if (saveError) throw saveError;
 
-            // ATUALIZAÇÃO DIRETA E FORÇADA DO ESTADO
-            setConnections(prevConnections => {
-              const otherConnections = prevConnections.filter(c => c.platform !== platform);
-              return [...otherConnections, result.connection];
-            });
+            // STEP 3: ONLY after successful save, reload connections from database
+            await loadConnections();
 
             success(`${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform} conectado com sucesso!`);
             
           } catch (err) {
             console.error("Error saving OAuth tokens:", err);
-            showError("Falha ao salvar a conexão com a conta.");
+            showError(`Falha ao conectar ${PLATFORM_CONFIG[platform as keyof typeof PLATFORM_CONFIG]?.name || platform}. Tente novamente.`);
+          } finally {
+            setProcessingOAuth(false);
           }
         }
       } else {
+        // STEP 4: Normal page load - just load connections
         await loadConnections();
       }
 
@@ -95,11 +99,13 @@ export default function MinhaConta() {
   const handleConnectPlatform = async (platform: string) => {
     setConnectingPlatform(platform);
     try {
-      const { data, error } = await supabase.functions.invoke('start-oauth-flow', {
+      const { data, error } = await supabase.functions.invoke('start-oauth-flow', {
         body: { platform, state: platform }
       });
+      
       if (error) throw error;
-      if(data.auth_url) {
+      
+      if (data.auth_url) {
         window.location.href = data.auth_url;
       } else {
         throw new Error("URL de autorização não recebida do servidor.");
@@ -150,8 +156,18 @@ export default function MinhaConta() {
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 space-y-6">
           <h2 className="text-lg font-semibold text-gray-800">Contas Conectadas</h2>
           <p className="text-sm text-gray-600">
-            Conecte suas contas para que o NEURA possa analisar a performance e gerar insights.
+            Conecte suas contas para que o NEURA possa analisar a performance e gerar insights personalizados.
           </p>
+          
+          {processingOAuth && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                <p className="text-blue-800 font-medium">Processando conexão OAuth...</p>
+              </div>
+            </div>
+          )}
+          
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Object.entries(PLATFORM_CONFIG).map(([platform, config]) => {
               const connection = connections.find(c => c.platform === platform);
@@ -182,6 +198,7 @@ export default function MinhaConta() {
                     {isConnected ? (
                       <button
                         onClick={() => handleDisconnectPlatform(platform)}
+                        disabled={processingOAuth}
                         className="w-full px-3 py-2 text-sm font-semibold text-red-600 bg-white border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
                       >
                         Desconectar
@@ -190,6 +207,7 @@ export default function MinhaConta() {
                       <LoadingButton
                         onClick={() => handleConnectPlatform(platform)}
                         loading={connectingPlatform === platform}
+                        disabled={processingOAuth}
                         className="w-full text-sm"
                       >
                         Conectar {config.name}
@@ -198,8 +216,11 @@ export default function MinhaConta() {
                   </div>
                 </div>
               );
-            })}
-          </div>
+        <div className="flex flex-col items-center justify-center h-64 space-y-4">
+          <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+          <p className="text-gray-600">
+            {processingOAuth ? 'Finalizando conexão...' : 'Carregando conta...'}
+          </p>
         </div>
       </div>
     </Layout>
