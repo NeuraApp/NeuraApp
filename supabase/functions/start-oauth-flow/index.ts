@@ -29,6 +29,17 @@ const OAUTH_CONFIG = {
       'user.info.profile',
       'user.info.stats'
     ]
+  },
+  tiktok: {
+    client_id: Deno.env.get('TIKTOK_CLIENT_KEY')!,
+    auth_url: 'https://www.tiktok.com/v2/auth/authorize/',
+    scopes: [
+      'user.info.basic',
+      'video.list',
+      'video.insights',
+      'user.info.profile',
+      'user.info.stats'
+    ]
   }
 };
 
@@ -56,6 +67,26 @@ function buildAuthUrl(platform: string, state: string, redirectUri: string): str
         client_id: config.client_id,
         redirect_uri: redirectUri,
         scope: config.scopes.join(' '),
+        response_type: 'code',
+        state: state,
+        access_type: 'offline', // Para obter refresh token
+        prompt: 'consent' // Forçar consentimento para refresh token
+      });
+      break;
+      
+    case 'tiktok':
+      params = new URLSearchParams({
+        client_key: config.client_id, // TikTok uses 'client_key' instead of 'client_id'
+        redirect_uri: redirectUri,
+        scope: config.scopes.join(','), // TikTok uses comma-separated scopes
+        response_type: 'code',
+        state: state
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
         response_type: 'code',
         state: state,
         access_type: 'offline', // Para obter refresh token

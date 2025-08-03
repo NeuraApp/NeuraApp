@@ -22,6 +22,12 @@ const TOKEN_CONFIG = {
     client_secret: Deno.env.get('TIKTOK_CLIENT_SECRET')!,
     token_url: 'https://open.tiktokapis.com/v2/oauth/token/',
     user_info_url: 'https://open.tiktokapis.com/v2/user/info/'
+  },
+  tiktok: {
+    client_id: Deno.env.get('TIKTOK_CLIENT_KEY')!,
+    client_secret: Deno.env.get('TIKTOK_CLIENT_SECRET')!,
+    token_url: 'https://open.tiktokapis.com/v2/oauth/token/',
+    user_info_url: 'https://open.tiktokapis.com/v2/user/info/'
   }
 };
 
@@ -56,6 +62,33 @@ async function exchangeCodeForTokens(platform: string, code: string, redirectUri
         body: new URLSearchParams({
           client_id: config.client_id,
           client_secret: config.client_secret,
+          code,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+        }),
+      });
+      break;
+      
+    case 'tiktok':
+      tokenResponse = await fetch(config.token_url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Cache-Control': 'no-cache',
+        },
+        body: new URLSearchParams({
+          client_key: config.client_id, // TikTok uses 'client_key'
+          client_secret: config.client_secret,
+          code,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+        }),
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
           code,
           grant_type: 'authorization_code',
           redirect_uri: redirectUri,
@@ -123,6 +156,29 @@ async function getUserInfo(platform: string, accessToken: string) {
     default:
       throw new Error(`Unsupported platform: ${platform}`);
   }
+      userResponse = await fetch(config.user_info_url, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      break;
+      
+    case 'tiktok':
+      userResponse = await fetch(config.user_info_url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fields: ['open_id', 'union_id', 'avatar_url', 'display_name', 'username']
+        }),
+      });
+      break;
+      
+    default:
+      throw new Error(`Unsupported platform: ${platform}`);
+  }
 
   if (!userResponse.ok) {
     const errorText = await userResponse.text();
@@ -130,6 +186,40 @@ async function getUserInfo(platform: string, accessToken: string) {
   }
 
   const userData = await userResponse.json();
+  
+  // Normalizar dados do usuário por plataforma
+  if (platform === 'youtube') {
+    const channel = userData.items?.[0];
+    return {
+      platform_user_id: channel?.id,
+      platform_username: channel?.snippet?.title,
+      platform_data: {
+        channel_id: channel?.id,
+        channel_title: channel?.snippet?.title,
+        channel_description: channel?.snippet?.description,
+        thumbnail_url: channel?.snippet?.thumbnails?.default?.url,
+        subscriber_count: channel?.statistics?.subscriberCount,
+        video_count: channel?.statistics?.videoCount
+      }
+    };
+  } else if (platform === 'tiktok') {
+    const user = userData.data?.user;
+    return {
+      platform_user_id: user?.open_id || user?.union_id,
+      platform_username: user?.display_name || user?.username,
+      platform_data: {
+        open_id: user?.open_id,
+        union_id: user?.union_id,
+        display_name: user?.display_name,
+        username: user?.username,
+        avatar_url: user?.avatar_url,
+        follower_count: user?.follower_count,
+        following_count: user?.following_count
+      }
+    };
+  }
+  
+  throw new Error(`Unknown platform: ${platform}`);
   
   // Normalizar dados do usuário por plataforma
   if (platform === 'youtube') {
@@ -199,6 +289,8 @@ Deno.serve(async (req) => {
     
     console.log(`Processing OAuth callback for platform: ${platform}, user: ${userId}`);
     
+    console.log(`Processing OAuth callback for platform: ${platform}, user: ${userId}`);
+    
     // Verificar se state não expirou (10 minutos)
     const now = Date.now();
     if (now - timestamp > 600000) {
@@ -223,6 +315,7 @@ Deno.serve(async (req) => {
 
     // Trocar code por tokens
     console.log(`Exchanging code for tokens - Platform: ${platform}`);
+    console.log(`Exchanging code for tokens - Platform: ${platform}`);
     const tokenData = await exchangeCodeForTokens(platform, code, redirectUri);
     
     if (!tokenData.access_token) {
@@ -240,6 +333,7 @@ Deno.serve(async (req) => {
 
     // Salvar conexão no banco com upsert para garantir atualização
     console.log(`Saving connection to database for user: ${userId}, platform: ${platform}`);
+    console.log(`Saving connection to database for user: ${userId}, platform: ${platform}`);
     const { error: saveError } = await supabase
       .from('user_connections')
       .upsert({
@@ -252,17 +346,17 @@ Deno.serve(async (req) => {
         expires_at: expiresAt?.toISOString(),
         scopes: tokenData.scope?.split(' ') || [],
         status: 'active',
-        platform_data: userInfo.platform_data,
-        last_sync_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
       }, {
         onConflict: 'user_id,platform'
       });
 
     if (saveError) {
       console.error('Database save error:', saveError);
+      console.error('Database save error:', saveError);
       throw new Error(`Failed to save connection: ${saveError.message}`);
     }
+
+    console.log(`Successfully saved ${platform} connection for user ${userId}`);
 
     console.log(`Successfully saved ${platform} connection for user ${userId}`);
 
@@ -304,6 +398,10 @@ Deno.serve(async (req) => {
           user_id: userId,
           success: false,
           error: error.message,
+          metadata: {
+            platform: state.includes(':') ? parseState(state).platform : 'unknown',
+            error_type: error.name || 'UnknownError'
+          },
           metadata: {
             platform: state.includes(':') ? parseState(state).platform : 'unknown',
             error_type: error.name || 'UnknownError'
