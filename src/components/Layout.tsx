@@ -63,6 +63,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       name: 'Preferências', 
       path: '/preferencias',
       icon: <Settings className="w-5 h-5" />
+    },
+    { 
+      name: 'Database', 
+      path: '/admin/database',
+      icon: <Database className="w-5 h-5" />
     }
   ];
 

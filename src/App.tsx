@@ -15,6 +15,7 @@ import Campanhas from "./pages/Campanhas";
 import Pricing from "./pages/Pricing";
 import Payment from "./pages/Payment";
 import AdminSubscriptions from "./pages/admin/Subscriptions";
+import DatabaseInspection from "./pages/admin/DatabaseInspection";
 import AccountSubscription from "./pages/account/Subscription";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -37,6 +38,7 @@ function App() {
         <Route path="/preferencias" element={<ProtectedRoute adminOnly={true}><Preferencias /></ProtectedRoute>} />
         <Route path="/campanhas" element={<ProtectedRoute><Campanhas /></ProtectedRoute>} />
         <Route path="/admin/subscriptions" element={<ProtectedRoute><AdminSubscriptions /></ProtectedRoute>} />
+        <Route path="/admin/database" element={<ProtectedRoute adminOnly={true}><DatabaseInspection /></ProtectedRoute>} />
         <Route path="/account/subscription" element={<ProtectedRoute><AccountSubscription /></ProtectedRoute>} />
       </Routes>
     </Router>
